@@ -380,7 +380,9 @@ def main():
             )
 
         # Load multiple validation files into separate splits
-        validation_files_list = [f.strip() for f in data_args.validation_files.split(",")]
+        validation_files_list = [f.strip() for f in data_args.validation_files.split(",") if f.strip()]
+        if not validation_files_list:
+            raise ValueError("`validation_files` must contain at least one non-empty file path.")
         if len(validation_files_list) == 1:
             # Single validation file: load as "validation" split (backward compatible)
             data_files_val = {"validation": validation_files_list[0]}
@@ -470,8 +472,8 @@ def main():
         # We have to deal with common cases that labels appear in the training set but not in the validation/test set.
         # So we build the label list from the union of labels in train/val/test.
         label_list = get_label_list(raw_datasets, split="train")
-        for split in ["validation", "test"]:
-            if split in raw_datasets:
+        for split in raw_datasets:
+            if split.startswith("validation") or split == "test":
                 val_or_test_labels = get_label_list(raw_datasets, split=split)
                 diff = set(val_or_test_labels).difference(set(label_list))
                 if len(diff) > 0:
