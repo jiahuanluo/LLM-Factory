@@ -345,7 +345,7 @@ def main():
     else:
         # Loading a dataset from your local files.
         # CSV/JSON training and evaluation files are needed.
-        data_files = {"train": data_args.train_file, "validation": data_args.validation_file}
+        data_files = {"train": data_args.train_file}
 
         # Get the test dataset: you can provide your own CSV/JSON test file
         if training_args.do_predict:
@@ -378,6 +378,27 @@ def main():
                 cache_dir=model_args.cache_dir,
                 token=model_args.token,
             )
+
+        # Load multiple validation files into separate splits
+        validation_files_list = [f.strip() for f in data_args.validation_files.split(",")]
+        if len(validation_files_list) == 1:
+            # Single validation file: load as "validation" split (backward compatible)
+            data_files_val = {"validation": validation_files_list[0]}
+            if data_args.train_file.endswith(".csv"):
+                val_datasets = load_dataset("csv", data_files=data_files_val, cache_dir=model_args.cache_dir, token=model_args.token)
+            else:
+                val_datasets = load_dataset("json", data_files=data_files_val, cache_dir=model_args.cache_dir, token=model_args.token)
+            raw_datasets["validation"] = val_datasets["validation"]
+        else:
+            # Multiple validation files: load each as "validation_N"
+            for i, val_file in enumerate(validation_files_list):
+                data_files_val = {"validation": val_file}
+                if data_args.train_file.endswith(".csv"):
+                    val_datasets = load_dataset("csv", data_files=data_files_val, cache_dir=model_args.cache_dir, token=model_args.token)
+                else:
+                    val_datasets = load_dataset("json", data_files=data_files_val, cache_dir=model_args.cache_dir, token=model_args.token)
+                raw_datasets[f"validation_{i}"] = val_datasets["validation"]
+                logger.info(f"Loaded validation file '{val_file}' as split 'validation_{i}'")
 
     # See more about loading any type of standard or custom dataset at
     # https://huggingface.co/docs/datasets/loading_datasets.
