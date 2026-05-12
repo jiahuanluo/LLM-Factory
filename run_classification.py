@@ -389,6 +389,7 @@ def main():
             else:
                 val_datasets = load_dataset("json", data_files=data_files_val, cache_dir=model_args.cache_dir, token=model_args.token)
             raw_datasets["validation"] = val_datasets["validation"]
+            logger.info(f"Loaded validation file '{validation_files_list[0]}' as split 'validation'")
         else:
             # Multiple validation files: load each as "validation_N"
             for i, val_file in enumerate(validation_files_list):
