@@ -731,6 +731,12 @@ def main():
     if training_args.do_eval:
         logger.info("*** Evaluate ***")
         metrics = trainer.evaluate(eval_dataset=eval_dataset)
+        if isinstance(eval_dataset, dict):
+            # Transform eval_validation_N_metric → eval/validation_N/metric for TensorBoard hierarchy
+            metrics = {
+                (k.replace("eval_validation_", "eval/validation/", 1).replace("_", "/", 1) if k.startswith("eval_validation_") else k): v
+                for k, v in metrics.items()
+            }
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
 
