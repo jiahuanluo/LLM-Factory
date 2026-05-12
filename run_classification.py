@@ -611,18 +611,32 @@ def main():
             train_dataset = train_dataset.select(range(max_train_samples))
 
     if training_args.do_eval:
-        if "validation" not in raw_datasets and "validation_matched" not in raw_datasets:
+        # Build eval_dict: collect all validation splits
+        eval_dict = {}
+        for key in raw_datasets:
+            if key.startswith("validation"):
+                ds = raw_datasets[key]
+                if data_args.max_eval_samples is not None:
+                    max_eval_samples = min(len(ds), data_args.max_eval_samples)
+                    ds = ds.select(range(max_eval_samples))
+                eval_dict[key] = ds
+
+        if len(eval_dict) == 0:
+            # Fallback to test set
             if "test" not in raw_datasets and "test_matched" not in raw_datasets:
                 raise ValueError("--do_eval requires a validation or test dataset if validation is not defined.")
             else:
                 logger.warning("Validation dataset not found. Falling back to test dataset for validation.")
                 eval_dataset = raw_datasets["test"]
+                if data_args.max_eval_samples is not None:
+                    max_eval_samples = min(len(eval_dataset), data_args.max_eval_samples)
+                    eval_dataset = eval_dataset.select(range(max_eval_samples))
+        elif len(eval_dict) == 1:
+            # Single validation: use the dataset directly for backward compatibility
+            eval_dataset = list(eval_dict.values())[0]
         else:
-            eval_dataset = raw_datasets["validation"]
-
-        if data_args.max_eval_samples is not None:
-            max_eval_samples = min(len(eval_dataset), data_args.max_eval_samples)
-            eval_dataset = eval_dataset.select(range(max_eval_samples))
+            # Multiple validations: use dict
+            eval_dataset = eval_dict
 
     if training_args.do_predict or data_args.test_file is not None:
         if "test" not in raw_datasets:
@@ -715,8 +729,6 @@ def main():
     if training_args.do_eval:
         logger.info("*** Evaluate ***")
         metrics = trainer.evaluate(eval_dataset=eval_dataset)
-        max_eval_samples = data_args.max_eval_samples if data_args.max_eval_samples is not None else len(eval_dataset)
-        metrics["eval_samples"] = min(max_eval_samples, len(eval_dataset))
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
 
