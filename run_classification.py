@@ -23,7 +23,6 @@
 #     "scikit-learn",
 #     "protobuf",
 #     "torch >= 1.3",
-#     "evaluate",
 # ]
 # ///
 
@@ -37,9 +36,9 @@ import sys
 from dataclasses import dataclass, field
 
 import datasets
-import evaluate
 import numpy as np
 from datasets import Value, load_dataset
+from sklearn.metrics import accuracy_score, roc_auc_score, roc_curve, mean_squared_error, f1_score
 
 import transformers
 from transformers import (
@@ -655,41 +654,45 @@ def main():
             logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
 
     if data_args.metric_name is not None:
-        metric = (
-            evaluate.load(data_args.metric_name, config_name="multilabel", cache_dir=model_args.cache_dir)
-            if is_multi_label
-            else evaluate.load(data_args.metric_name, cache_dir=model_args.cache_dir)
-        )
-        logger.info(f"Using metric {data_args.metric_name} for evaluation.")
+        metric_name = data_args.metric_name
+    elif is_regression:
+        metric_name = "mse"
+    elif is_multi_label:
+        metric_name = "f1"
     else:
-        if is_regression:
-            metric = evaluate.load("mse", cache_dir=model_args.cache_dir)
-            logger.info("Using mean squared error (mse) as regression score, you can use --metric_name to overwrite.")
-        else:
-            if is_multi_label:
-                metric = evaluate.load("f1", config_name="multilabel", cache_dir=model_args.cache_dir)
-                logger.info(
-                    "Using multilabel F1 for multi-label classification task, you can use --metric_name to overwrite."
-                )
-            else:
-                metric = evaluate.load("accuracy", cache_dir=model_args.cache_dir)
-                logger.info("Using accuracy as classification score, you can use --metric_name to overwrite.")
+        metric_name = "accuracy"
+    logger.info(f"Using metric '{metric_name}' for evaluation.")
 
     def compute_metrics(p: EvalPrediction):
         preds = p.predictions[0] if isinstance(p.predictions, tuple) else p.predictions
         if is_regression:
             preds = np.squeeze(preds)
-            result = metric.compute(predictions=preds, references=p.label_ids)
+            return {"mse": mean_squared_error(p.label_ids, preds)}
         elif is_multi_label:
-            preds = np.array([np.where(p > 0, 1, 0) for p in preds])  # convert logits to multi-hot encoding
-            # Micro F1 is commonly used in multi-label classification
-            result = metric.compute(predictions=preds, references=p.label_ids, average="micro")
+            preds = np.array([np.where(p > 0, 1, 0) for p in preds])
+            return {"f1": f1_score(p.label_ids, preds, average="micro")}
         else:
+            probs = preds
             preds = np.argmax(preds, axis=1)
-            result = metric.compute(predictions=preds, references=p.label_ids)
-        if len(result) > 1:
-            result["combined_score"] = np.mean(list(result.values())).item()
-        return result
+            result = {}
+            if metric_name == "accuracy":
+                result["accuracy"] = accuracy_score(p.label_ids, preds)
+            elif metric_name == "auc":
+                # Binary: use positive class probability; Multi-class: one-vs-rest
+                if probs.shape[1] == 2:
+                    result["auc"] = roc_auc_score(p.label_ids, probs[:, 1])
+                else:
+                    result["auc"] = roc_auc_score(p.label_ids, probs, multi_class="ovr")
+            elif metric_name == "ks":
+                # KS = max(TPR - FPR) from ROC curve
+                if probs.shape[1] == 2:
+                    fpr, tpr, _ = roc_curve(p.label_ids, probs[:, 1])
+                    result["ks"] = float(np.max(tpr - fpr))
+                else:
+                    raise ValueError("KS metric only supports binary classification.")
+            else:
+                raise ValueError(f"Unknown metric: {metric_name}. Supported: accuracy, auc, ks, mse, f1")
+            return result
 
     # Data collator will default to DataCollatorWithPadding when the tokenizer is passed to Trainer, so we change it if
     # we already did the padding.

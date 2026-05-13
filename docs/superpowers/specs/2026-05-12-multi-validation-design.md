@@ -30,13 +30,12 @@
 ### 2. 数据加载
 
 - `validation_files` 用 `split(",")` 拆分为列表
-- 每个验证集文件独立加载，存入 dict：
+- 每个验证集文件独立加载，取 `["validation"]` split 后存入 dict：
   ```python
-  eval_dict = {
-      "validation_0": load_dataset(extension, data_files={"validation": file_0}),
-      "validation_1": load_dataset(extension, data_files={"validation": file_1}),
-      ...
-  }
+  eval_dict = {}
+  for i, val_file in enumerate(validation_files_list):
+      ds = load_dataset(extension, data_files={"validation": val_file}, ...)
+      eval_dict[f"validation_{i}"] = ds["validation"]
   ```
 - train 文件加载逻辑不变
 
