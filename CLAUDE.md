@@ -4,39 +4,50 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-基于 HuggingFace Transformers 的 LLM 微调工具集，包含两个训练脚本，均改编自 Transformers 官方示例。
+基于 HuggingFace Transformers 的 LLM 微调工具集，包含两个独立训练脚本，均改编自 Transformers 官方示例。无测试套件，无 CI/CD。
 
 ## 训练脚本
 
-- **`run_classification.py`** — 文本分类微调（支持单标签、多标签、回归任务）
-- **`run_mlm.py`** — 掩码语言模型（MLM）微调（适用于 BERT、ALBERT、RoBERTa 等）
-
-两个脚本均使用 `HfArgumentParser` 解析三类参数：`ModelArguments`、`DataTrainingArguments`、`TrainingArguments`。支持通过命令行参数或 JSON 配置文件传参。
+- **`run_classification.py`** — 文本分类微调（单标签 / 多标签 / 回归），使用 sklearn 做评估指标
+- **`run_mlm.py`** — 掩码语言模型微调（BERT、ALBERT、RoBERTa 等），支持从头训练
 
 ## 运行方式
 
 ```bash
-# 文本分类
+# 文本分类（Hub 数据集 / 本地文件）
 python run_classification.py --model_name_or_path <model> --dataset_name <dataset> --do_train --do_eval
+python run_classification.py --model_name_or_path <model> --train_file train.csv --validation_files val.csv --do_train --do_eval
 
-# 掩码语言模型
+# MLM
 python run_mlm.py --model_name_or_path <model> --dataset_name <dataset> --do_train --do_eval
 
-# 使用 JSON 配置文件
+# JSON 配置文件（单一 .json 参数即走此路径）
 python run_classification.py config.json
-
-# 多验证集评估
-python run_classification.py --model_name_or_path <model> --train_file train.csv \
-  --validation_files val1.csv,val2.csv,val3.csv --do_eval
 ```
+
+参数传递：两个脚本均通过 `HfArgumentParser` 解析 `ModelArguments` + `DataTrainingArguments` + `TrainingArguments` 三类 dataclass。
 
 ## 依赖
 
-核心依赖：`transformers`（开发版，需 4.57.0+）、`datasets`、`torch`、`evaluate`、`accelerate`、`scikit-learn`。具体版本见各脚本头部的 PEP 723 inline metadata。
+核心：`transformers>=4.57.0`、`datasets`、`torch`、`accelerate`、`scikit-learn`。详见各脚本头部 PEP 723 inline metadata 及 `requirements.txt`。`evaluate` 已替换为本地 sklearn 指标，不再依赖。
 
 ## 架构要点
 
-- 数据加载支持 HuggingFace Hub 数据集和本地 CSV/JSON/TXT 文件
-- `run_classification.py` 自动推断任务类型（回归/单标签/多标签），默认评估指标分别为 MSE/accuracy/F1
-- `run_mlm.py` 支持两种文本处理模式：逐行 tokenize（`--line_by_line`）和拼接后分块（默认）
-- 使用 Transformers `Trainer` API 进行训练，支持分布式训练、混合精度、checkpoint 恢复
+### run_classification.py
+
+- 任务类型自动推断：label 列为 float → 回归（MSE），为 list → 多标签（F1 micro），其他 → 单标签（默认 accuracy，支持 auc/ks）
+- 多验证集：`--validation_files` 接受逗号分隔路径，单个文件加载为 `"validation"` split，多个加载为 `"validation_0"`, `"validation_1"` ... Trainer 对每个 key 分别评估
+- label 发现：从 train + 所有 validation/test split 合并 label list，防止 val 出现 train 未见的标签
+
+### run_mlm.py
+
+- 两种文本处理：`--line_by_line` 逐行 tokenize；默认模式拼接后按 `max_seq_length` 分块（`group_texts`）
+- 无 validation split 时自动从 train 按 `--validation_split_percentage`（默认 5%）切分
+- 评估输出 perplexity（`exp(eval_loss)`）和 accuracy
+- 支持从零训练（`model_name_or_path=None` + `--model_type`）和 streaming 模式
+
+### 共性
+
+- 使用 Transformers `Trainer` API，支持分布式训练、混合精度、checkpoint 恢复
+- `processing_class=tokenizer` 传递给 Trainer（非旧版 `tokenizer=` 参数）
+- 本地文件支持 CSV 和 JSON 格式；Hub 数据集通过 `dataset_name` 指定

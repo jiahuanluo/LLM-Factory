@@ -17,7 +17,7 @@
 # dependencies = [
 #     "transformers>=4.57.0",
 #     "accelerate >= 0.12.0",
-#     "datasets >= 1.8.0",
+#     "datasets >= 2.14.0",
 #     "sentencepiece != 0.1.92",
 #     "scipy",
 #     "scikit-learn",
@@ -60,7 +60,7 @@ from transformers.utils.versions import require_version
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.57.0.dev0")
 
-require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/text-classification/requirements.txt")
+require_version("datasets>=2.14.0", "To fix: pip install -r examples/pytorch/text-classification/requirements.txt")
 
 
 logger = logging.getLogger(__name__)
@@ -208,13 +208,17 @@ class DataTrainingArguments:
                 raise ValueError("Need either a training/validation file or a dataset name.")
 
             train_extension = self.train_file.split(".")[-1]
-            assert train_extension in ["csv", "json"], "`train_file` should be a csv or a json file."
+            if train_extension not in ["csv", "json"]:
+                raise ValueError("`train_file` should be a csv or a json file.")
             for val_file in self.validation_files.split(","):
                 val_file = val_file.strip()
+                if not val_file:
+                    raise ValueError("Empty path found in --validation_files.")
                 validation_extension = val_file.split(".")[-1]
-                assert validation_extension == train_extension, (
-                    f"`validation_files` entry '{val_file}' should have the same extension (csv or json) as `train_file`."
-                )
+                if validation_extension != train_extension:
+                    raise ValueError(
+                        f"`validation_files` entry '{val_file}' should have the same extension (csv or json) as `train_file`."
+                    )
 
 
 @dataclass
@@ -280,6 +284,11 @@ def get_label_list(raw_dataset, split="train") -> list[str]:
     # we will treat the label list as a list of string instead of int, consistent with model.config.label2id
     label_list = [str(label) for label in label_list]
     return label_list
+
+
+def _load_dataset(filepath, is_csv, cache_dir, token):
+    fmt = "csv" if is_csv else "json"
+    return load_dataset(fmt, data_files={"validation": filepath}, cache_dir=cache_dir, token=token)
 
 
 def main():
@@ -351,9 +360,10 @@ def main():
             if data_args.test_file is not None:
                 train_extension = data_args.train_file.split(".")[-1]
                 test_extension = data_args.test_file.split(".")[-1]
-                assert test_extension == train_extension, (
-                    "`test_file` should have the same extension (csv or json) as `train_file`."
-                )
+                if test_extension != train_extension:
+                    raise ValueError(
+                        "`test_file` should have the same extension (csv or json) as `train_file`."
+                    )
                 data_files["test"] = data_args.test_file
             else:
                 raise ValueError("Need either a dataset name or a test file for `do_predict`.")
@@ -382,23 +392,16 @@ def main():
         validation_files_list = [f.strip() for f in data_args.validation_files.split(",") if f.strip()]
         if not validation_files_list:
             raise ValueError("`validation_files` must contain at least one non-empty file path.")
+        is_csv = data_args.train_file.endswith(".csv")
         if len(validation_files_list) == 1:
             # Single validation file: load as "validation" split (backward compatible)
-            data_files_val = {"validation": validation_files_list[0]}
-            if data_args.train_file.endswith(".csv"):
-                val_datasets = load_dataset("csv", data_files=data_files_val, cache_dir=model_args.cache_dir, token=model_args.token)
-            else:
-                val_datasets = load_dataset("json", data_files=data_files_val, cache_dir=model_args.cache_dir, token=model_args.token)
+            val_datasets = _load_dataset(validation_files_list[0], is_csv, model_args.cache_dir, model_args.token)
             raw_datasets["validation"] = val_datasets["validation"]
             logger.info(f"Loaded validation file '{validation_files_list[0]}' as split 'validation'")
         else:
             # Multiple validation files: load each as "validation_N"
             for i, val_file in enumerate(validation_files_list):
-                data_files_val = {"validation": val_file}
-                if data_args.train_file.endswith(".csv"):
-                    val_datasets = load_dataset("csv", data_files=data_files_val, cache_dir=model_args.cache_dir, token=model_args.token)
-                else:
-                    val_datasets = load_dataset("json", data_files=data_files_val, cache_dir=model_args.cache_dir, token=model_args.token)
+                val_datasets = _load_dataset(val_file, is_csv, model_args.cache_dir, model_args.token)
                 raw_datasets[f"validation_{i}"] = val_datasets["validation"]
                 logger.info(f"Loaded validation file '{val_file}' as split 'validation_{i}'")
 
@@ -678,11 +681,15 @@ def main():
             if metric_name == "accuracy":
                 result["accuracy"] = accuracy_score(p.label_ids, preds)
             elif metric_name == "auc":
-                # Binary: use positive class probability; Multi-class: one-vs-rest
-                if probs.shape[1] == 2:
-                    result["auc"] = roc_auc_score(p.label_ids, probs[:, 1])
-                else:
-                    result["auc"] = roc_auc_score(p.label_ids, probs, multi_class="ovr")
+                try:
+                    if probs.shape[1] == 2:
+                        score = roc_auc_score(p.label_ids, probs[:, 1])
+                    else:
+                        score = roc_auc_score(p.label_ids, probs, multi_class="ovr")
+                    result["auc"] = score if not np.isnan(score) else 0.0
+                except ValueError as e:
+                    logger.warning(f"Could not compute AUC: {e}")
+                    result["auc"] = 0.0
             elif metric_name == "ks":
                 # KS = max(TPR - FPR) from ROC curve
                 if probs.shape[1] == 2:
@@ -734,6 +741,9 @@ def main():
     if training_args.do_eval:
         logger.info("*** Evaluate ***")
         metrics = trainer.evaluate(eval_dataset=eval_dataset)
+        if not isinstance(eval_dataset, dict):
+            max_eval_samples = data_args.max_eval_samples if data_args.max_eval_samples is not None else len(eval_dataset)
+            metrics["eval_samples"] = min(max_eval_samples, len(eval_dataset))
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
 
