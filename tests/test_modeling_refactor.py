@@ -184,6 +184,37 @@ class TestPrepareOutput:
         assert result.shape == (2, 16, 256)
 
 
+class TestMaybeUnpad:
+    """测试 NewEmbeddings._maybe_unpad 方法"""
+
+    def test_unpad_enabled(self, config):
+        """测试启用 unpad 时的行为"""
+        embeddings = NewEmbeddings(config)
+        tensor = torch.randn(2, 10, 256)
+        attention_mask_bool = torch.tensor([
+            [True, True, True, False, False, False, False, False, False, False],
+            [True, True, True, True, True, False, False, False, False, False]
+        ])
+
+        result = embeddings._maybe_unpad(tensor, attention_mask_bool, unpad_inputs=True)
+
+        assert result.shape == (1, 8, 256)  # 8 个有效 token
+
+    def test_unpad_disabled(self, config):
+        """测试禁用 unpad 时的行为"""
+        embeddings = NewEmbeddings(config)
+        tensor = torch.randn(2, 10, 256)
+        attention_mask_bool = torch.tensor([
+            [True, True, True, False, False, False, False, False, False, False],
+            [True, True, True, True, True, False, False, False, False, False]
+        ])
+
+        result = embeddings._maybe_unpad(tensor, attention_mask_bool, unpad_inputs=False)
+
+        assert result.shape == (2, 10, 256)
+        assert torch.equal(result, tensor)
+
+
 class TestNewModelForward:
     """测试 NewModel.forward() 方法"""
 

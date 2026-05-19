@@ -330,6 +330,27 @@ class NewEmbeddings(nn.Module):
             else:
                 raise ValueError(f"Unknown RoPE scaling type {scaling_type}")
 
+    def _maybe_unpad(
+        self,
+        tensor: torch.Tensor,
+        attention_mask_bool: torch.Tensor,
+        unpad_inputs: bool
+    ) -> torch.Tensor:
+        """
+        如果启用 unpad，则移除 padding 位置的元素
+
+        Args:
+            tensor: 输入张量
+            attention_mask_bool: 布尔注意力掩码
+            unpad_inputs: 是否 unpad
+
+        Returns:
+            处理后的张量
+        """
+        if unpad_inputs:
+            return tensor[attention_mask_bool].unsqueeze(0)
+        return tensor
+
     def forward(
         self,
         unpad_inputs: bool,
