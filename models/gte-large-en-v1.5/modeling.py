@@ -896,6 +896,33 @@ class NewModel(NewPreTrainedModel):
 
         return attention_bias, padding_inputs
 
+    def _prepare_output(
+        self,
+        sequence_output: torch.Tensor,
+        unpad_inputs: bool,
+        output_padded: bool,
+        indices: Optional[torch.Tensor],
+        batch_size: int,
+        seq_length: int
+    ) -> torch.Tensor:
+        """
+        准备输出，如果需要则重新 padding
+
+        Args:
+            sequence_output: 编码器输出
+            unpad_inputs: 是否 unpad
+            output_padded: 是否需要 padded 输出
+            indices: unpad 索引
+            batch_size: 批次大小
+            seq_length: 序列长度
+
+        Returns:
+            处理后的序列输出
+        """
+        if unpad_inputs and output_padded:
+            return pad_input(sequence_output.squeeze(), indices, batch_size, seq_length)
+        return sequence_output
+
     def forward(
         self,
         input_ids: Optional[torch.Tensor] = None,

@@ -145,6 +145,45 @@ class TestPrepareAttentionBias:
         assert len(padding_inputs) == 3  # (indices, batch_size, seq_length)
 
 
+class TestPrepareOutput:
+    """测试 _prepare_output 方法"""
+
+    def test_output_without_unpad(self, config):
+        """测试不使用 unpad 的输出处理"""
+        model = NewModel(config)
+        sequence_output = torch.randn(2, 16, 256)
+
+        result = model._prepare_output(
+            sequence_output,
+            unpad_inputs=False,
+            output_padded=True,
+            indices=None,
+            batch_size=2,
+            seq_length=16
+        )
+
+        assert result.shape == (2, 16, 256)
+        assert torch.equal(result, sequence_output)
+
+    def test_output_with_unpad_need_padding(self, config):
+        """测试使用 unpad 且需要重新 padding 的情况"""
+        model = NewModel(config)
+        # 模拟 unpad 后的输出（已 squeeze）
+        sequence_output = torch.randn(24, 256)  # 2*16 - 8 padding = 24 tokens
+        indices = torch.tensor([i for i in range(16)] + [i for i in range(16, 24)])
+
+        result = model._prepare_output(
+            sequence_output,
+            unpad_inputs=True,
+            output_padded=True,
+            indices=indices,
+            batch_size=2,
+            seq_length=16
+        )
+
+        assert result.shape == (2, 16, 256)
+
+
 class TestNewModelForward:
     """测试 NewModel.forward() 方法"""
 
