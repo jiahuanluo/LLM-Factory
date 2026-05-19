@@ -112,6 +112,39 @@ class TestPadInput:
         assert result[1, 5:].sum() == 0
 
 
+class TestPrepareAttentionBias:
+    """测试 _prepare_attention_bias 方法"""
+
+    def test_standard_attention_bias(self, config, batch_input):
+        """测试标准注意力偏置"""
+        input_ids, attention_mask = batch_input
+        model = NewModel(config)
+        input_shape = input_ids.shape
+
+        attention_bias, padding_inputs = model._prepare_attention_bias(
+            attention_mask, input_shape, unpad_inputs=False
+        )
+
+        # 标准模式应返回扩展的注意力掩码 (batch_size, 1, 1, seq_length)
+        assert attention_bias.shape == (2, 1, 1, 16)
+        assert padding_inputs is None
+
+    def test_unpad_without_xformers(self, config, batch_input):
+        """测试 unpad 模式（不使用 xformers）"""
+        input_ids, attention_mask = batch_input
+        model = NewModel(config)
+        input_shape = input_ids.shape
+        length = [16, 8]
+
+        attention_bias, padding_inputs = model._prepare_attention_bias(
+            attention_mask, input_shape, unpad_inputs=True, length=length
+        )
+
+        # 应返回 padding_inputs
+        assert padding_inputs is not None
+        assert len(padding_inputs) == 3  # (indices, batch_size, seq_length)
+
+
 class TestNewModelForward:
     """测试 NewModel.forward() 方法"""
 
