@@ -1,0 +1,11 @@
+transformers>=4.57.0
+accelerate>=0.12.0
+datasets>=2.14.0
+torch>=1.3
+sentencepiece!=0.1.92
+protobuf
+scikit-learn
+scipy
+albumentations>=1.4.16
+pandas>=1.5.0
+openpyxl>=3.0.0
