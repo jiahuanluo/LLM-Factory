@@ -15,21 +15,28 @@ class BatchProcessor:
 
     def __init__(
         self,
-        field_dict_path: str,
-        code_value_path: str,
+        json_dict_path: str = None,
+        field_dict_path: str = None,
+        code_value_path: str = None,
         excluded_fields: set = None,
-        num_workers: int = 4
+        num_workers: int = 4,
     ):
         """
         初始化批量处理器
 
         Args:
-            field_dict_path: 字段字典路径
-            code_value_path: 码值表路径
+            json_dict_path: 合并后的JSON字典文件路径（推荐）
+            field_dict_path: 字段字典xlsx路径（兼容旧版）
+            code_value_path: 码值表xlsx路径（兼容旧版）
             excluded_fields: 排除字段集合
             num_workers: 并行工作进程数
         """
-        self.field_mapper = FieldMapper(field_dict_path, code_value_path)
+        if json_dict_path:
+            self.field_mapper = FieldMapper(json_path=json_dict_path)
+        elif field_dict_path and code_value_path:
+            self.field_mapper = FieldMapper(field_dict_path, code_value_path)
+        else:
+            raise ValueError("必须提供 json_dict_path 或 (field_dict_path + code_value_path)")
         self.json_parser = JsonParser(excluded_fields or EXCLUDED_FIELDS)
         self.text_converter = TextConverter(self.field_mapper)
         self.num_workers = num_workers

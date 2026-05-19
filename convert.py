@@ -18,14 +18,17 @@ def main():
         help="输出目录（存放转换后的txt文件）"
     )
     parser.add_argument(
+        "--dict-file",
+        default="moc_data/credit_report_dict.json",
+        help="合并后的JSON字典文件路径（默认）"
+    )
+    parser.add_argument(
         "--field-dict",
-        default="moc_data/个人征信DB表结构字典.xlsx",
-        help="字段字典xlsx文件路径"
+        help="字段字典xlsx文件路径（兼容旧版）"
     )
     parser.add_argument(
         "--code-value",
-        default="moc_data/个人征信码值表.xlsx",
-        help="码值表xlsx文件路径"
+        help="码值表xlsx文件路径（兼容旧版）"
     )
     parser.add_argument(
         "--workers",
@@ -45,11 +48,17 @@ def main():
         parser.error("必须指定 --input 或 --single-file")
 
     # 创建处理器
-    processor = BatchProcessor(
-        field_dict_path=args.field_dict,
-        code_value_path=args.code_value,
-        num_workers=args.workers
-    )
+    if args.field_dict and args.code_value:
+        processor = BatchProcessor(
+            field_dict_path=args.field_dict,
+            code_value_path=args.code_value,
+            num_workers=args.workers,
+        )
+    else:
+        processor = BatchProcessor(
+            json_dict_path=args.dict_file,
+            num_workers=args.workers,
+        )
 
     if args.single_file:
         # 处理单个文件

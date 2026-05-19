@@ -28,8 +28,9 @@ python convert.py --input /path/to/json/files --output /path/to/output
 
 - `--input, -i`: 输入目录（包含JSON文件）
 - `--output, -o`: 输出目录（存放转换后的txt文件）
-- `--field-dict`: 字段字典xlsx文件路径（默认：moc_data/个人征信DB表结构字典.xlsx）
-- `--code-value`: 码值表xlsx文件路径（默认：moc_data/个人征信码值表.xlsx）
+- `--dict-file`: 合并后的JSON字典文件路径（默认：moc_data/credit_report_dict.json）
+- `--field-dict`: 字段字典xlsx文件路径（兼容旧版，与 --code-value 配合使用）
+- `--code-value`: 码值表xlsx文件路径（兼容旧版，与 --field-dict 配合使用）
 - `--workers`: 并行工作进程数（默认：4）
 - `--single-file`: 处理单个文件
 

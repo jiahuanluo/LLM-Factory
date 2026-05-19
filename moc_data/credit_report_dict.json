@@ -1,0 +1,2122 @@
+{
+  "field_mapping": {
+    "id": {
+      "english_name": "system_number",
+      "keyword": null
+    },
+    "reportsn": {
+      "english_name": "report_number",
+      "keyword": null
+    },
+    "PA01DQ01": {
+      "english_name": "anti_fraud_warning_flag",
+      "keyword": "防欺诈警示标志代码表"
+    },
+    "PA01DQ02": {
+      "english_name": "anti_fraud_warning_contact_number",
+      "keyword": null
+    },
+    "PA01DR01": {
+      "english_name": "anti_fraud_warning_effective_date",
+      "keyword": null
+    },
+    "PA01DR02": {
+      "english_name": "anti_fraud_warning_end_date",
+      "keyword": null
+    },
+    "tran_date": {
+      "english_name": "partition_field",
+      "keyword": null
+    },
+    "create_time": {
+      "english_name": "creation_date",
+      "keyword": null
+    },
+    "seq": {
+      "english_name": "serial_number",
+      "keyword": null
+    },
+    "PA01CS01": {
+      "english_name": "identity_count",
+      "keyword": null
+    },
+    "PA01CD01": {
+      "english_name": "document_type",
+      "keyword": "个人证件类型代码表"
+    },
+    "PA01CI01": {
+      "english_name": "document_number",
+      "keyword": null
+    },
+    "PA01BQ01": {
+      "english_name": "queried_person_name",
+      "keyword": null
+    },
+    "PA01BD01": {
+      "english_name": "queried_person_document_type",
+      "keyword": "个人证件类型代码表"
+    },
+    "PA01BI01": {
+      "english_name": "queried_person_document_number",
+      "keyword": null
+    },
+    "PA01BI02": {
+      "english_name": "querying_organization_code",
+      "keyword": "机构类型代码"
+    },
+    "PA01BD02": {
+      "english_name": "query_reason_code",
+      "keyword": "查询原因代码"
+    },
+    "code": {
+      "english_name": "result_code",
+      "keyword": null
+    },
+    "cert_type": {
+      "english_name": "queried_person_document_type",
+      "keyword": "个人证件类型代码表"
+    },
+    "cert_no": {
+      "english_name": "queried_person_document_number",
+      "keyword": null
+    },
+    "name": {
+      "english_name": "name",
+      "keyword": null
+    },
+    "orgsysid": {
+      "english_name": "organization_id",
+      "keyword": null
+    },
+    "product_id": {
+      "english_name": "product_id",
+      "keyword": null
+    },
+    "content_code": {
+      "english_name": "system_field",
+      "keyword": null
+    },
+    "report_time": {
+      "english_name": "report_time",
+      "keyword": null
+    },
+    "dissent_tip_number": {
+      "english_name": "dispute_annotation_count",
+      "keyword": null
+    },
+    "PB01AD01": {
+      "english_name": "gender",
+      "keyword": "性别代码表"
+    },
+    "PB01AR01": {
+      "english_name": "date_of_birth",
+      "keyword": null
+    },
+    "PB01AD02": {
+      "english_name": "education_level",
+      "keyword": "学历代码表"
+    },
+    "PB01AD03": {
+      "english_name": "degree",
+      "keyword": "学位代码表"
+    },
+    "PB01AD04": {
+      "english_name": "employment_status",
+      "keyword": "就业状况代码表"
+    },
+    "PB01AQ01": {
+      "english_name": "email",
+      "keyword": null
+    },
+    "PB01AQ02": {
+      "english_name": "mailing_address",
+      "keyword": null
+    },
+    "PB01AD05": {
+      "english_name": "nationality",
+      "keyword": null
+    },
+    "PB01AQ03": {
+      "english_name": "household_registration_address",
+      "keyword": null
+    },
+    "PB020D01": {
+      "english_name": "marital_status",
+      "keyword": "婚姻状况代码表"
+    },
+    "PB020Q01": {
+      "english_name": "spouse_name",
+      "keyword": null
+    },
+    "PB020D02": {
+      "english_name": "spouse_document_type",
+      "keyword": "个人证件类型代码表"
+    },
+    "PB020I01": {
+      "english_name": "spouse_document_number",
+      "keyword": null
+    },
+    "PB020Q02": {
+      "english_name": "spouse_employer",
+      "keyword": null
+    },
+    "PB020Q03": {
+      "english_name": "spouse_contact_number",
+      "keyword": null
+    },
+    "PB01BS01": {
+      "english_name": "number_of_mobile_numbers",
+      "keyword": null
+    },
+    "PB01BQ01": {
+      "english_name": "mobile_number",
+      "keyword": null
+    },
+    "PB01BR01": {
+      "english_name": "information_update_date",
+      "keyword": null
+    },
+    "PB040D01": {
+      "english_name": "employment_status",
+      "keyword": "就业状况代码表"
+    },
+    "PB040Q01": {
+      "english_name": "employer",
+      "keyword": null
+    },
+    "PB040D02": {
+      "english_name": "employer_type",
+      "keyword": "单位性质代码表"
+    },
+    "PB040D03": {
+      "english_name": "industry",
+      "keyword": "国民经济行业代码表"
+    },
+    "PB040Q02": {
+      "english_name": "employer_address",
+      "keyword": null
+    },
+    "PB040Q03": {
+      "english_name": "employer_phone_number",
+      "keyword": null
+    },
+    "PB040D04": {
+      "english_name": "occupation",
+      "keyword": "职业代码表"
+    },
+    "PB040D05": {
+      "english_name": "position",
+      "keyword": "职务代码表"
+    },
+    "PB040D06": {
+      "english_name": "professional_title",
+      "keyword": "职称代码表"
+    },
+    "PB040R01": {
+      "english_name": "year_of_joining_employer",
+      "keyword": null
+    },
+    "PB040R02": {
+      "english_name": "information_update_date",
+      "keyword": null
+    },
+    "PB030D01": {
+      "english_name": "residential_status",
+      "keyword": "居住状况代码表"
+    },
+    "PB030Q01": {
+      "english_name": "residential_address",
+      "keyword": null
+    },
+    "PB030Q02": {
+      "english_name": "home_phone_number",
+      "keyword": null
+    },
+    "PB030R01": {
+      "english_name": "information_update_date",
+      "keyword": null
+    },
+    "PC02CS01": {
+      "english_name": "number_of_accounts",
+      "keyword": null
+    },
+    "PC02CJ01": {
+      "english_name": "balance",
+      "keyword": null
+    },
+    "PC02HS01": {
+      "english_name": "number_of_card_issuing_institutions",
+      "keyword": null
+    },
+    "PC02HS02": {
+      "english_name": "number_of_accounts",
+      "keyword": null
+    },
+    "PC02HJ01": {
+      "english_name": "total_credit_limit",
+      "keyword": null
+    },
+    "PC02HJ02": {
+      "english_name": "highest_credit_limit_per_bank",
+      "keyword": null
+    },
+    "PC02HJ03": {
+      "english_name": "lowest_credit_limit_per_bank",
+      "keyword": null
+    },
+    "PC02HJ04": {
+      "english_name": "used_credit_limit",
+      "keyword": null
+    },
+    "PC02HJ05": {
+      "english_name": "average_credit_usage_last_6_months",
+      "keyword": null
+    },
+    "PC02DS01": {
+      "english_name": "number_of_business_types",
+      "keyword": null
+    },
+    "PC02DD01": {
+      "english_name": "business_type",
+      "keyword": "个人逾期（透支）汇总信息账户类型代码表"
+    },
+    "PC02DS02": {
+      "english_name": "number_of_accounts",
+      "keyword": null
+    },
+    "PC02DS03": {
+      "english_name": "number_of_months",
+      "keyword": null
+    },
+    "PC02DJ01": {
+      "english_name": "highest_single_month_overdue_amount",
+      "keyword": null
+    },
+    "PC02DS04": {
+      "english_name": "longest_overdue_months",
+      "keyword": null
+    },
+    "PC030S01": {
+      "english_name": "number_of_postpaid_business_types",
+      "keyword": null
+    },
+    "PC030D01": {
+      "english_name": "postpaid_business_type",
+      "keyword": "后付费业务当前缴费状态代码表"
+    },
+    "PC030S02": {
+      "english_name": "number_of_overdue_accounts",
+      "keyword": null
+    },
+    "PC030J01": {
+      "english_name": "overdue_amount",
+      "keyword": null
+    },
+    "PC040S01": {
+      "english_name": "number_of_public_information_types",
+      "keyword": null
+    },
+    "PC040D01": {
+      "english_name": "public_information_type",
+      "keyword": "公共信息类型代码表"
+    },
+    "PC040S02": {
+      "english_name": "number_of_records",
+      "keyword": null
+    },
+    "PC040J01": {
+      "english_name": "amount_involved",
+      "keyword": null
+    },
+    "PC05AR01": {
+      "english_name": "last_query_date",
+      "keyword": null
+    },
+    "PC05AD01": {
+      "english_name": "last_query_organization_type",
+      "keyword": null
+    },
+    "PC05AI01": {
+      "english_name": "last_query_organization_code",
+      "keyword": "机构类型代码"
+    },
+    "PC05AQ01": {
+      "english_name": "last_query_reason",
+      "keyword": "查询原因代码"
+    },
+    "PC05BS01": {
+      "english_name": "number_of_querying_organizations_last_1_month_loan_approval",
+      "keyword": null
+    },
+    "PC05BS02": {
+      "english_name": "number_of_querying_organizations_last_1_month_credit_card_approval",
+      "keyword": null
+    },
+    "PC05BS03": {
+      "english_name": "number_of_queries_last_1_month_loan_approval",
+      "keyword": null
+    },
+    "PC05BS04": {
+      "english_name": "number_of_queries_last_1_month_credit_card_approval",
+      "keyword": null
+    },
+    "PC05BS05": {
+      "english_name": "number_of_queries_last_1_month_self_query",
+      "keyword": null
+    },
+    "PC05BS06": {
+      "english_name": "number_of_queries_last_2_years_post_loan_management",
+      "keyword": null
+    },
+    "PC05BS07": {
+      "english_name": "number_of_queries_last_2_years_guarantee_qualification_review",
+      "keyword": null
+    },
+    "PC05BS08": {
+      "english_name": "number_of_queries_last_2_years_special_merchant_real_name_review",
+      "keyword": null
+    },
+    "PC02BS01": {
+      "english_name": "total_number_of_accounts",
+      "keyword": null
+    },
+    "PC02BJ01": {
+      "english_name": "total_balance",
+      "keyword": null
+    },
+    "PC02BS02": {
+      "english_name": "number_of_business_types",
+      "keyword": null
+    },
+    "PC02BD01": {
+      "english_name": "business_type",
+      "keyword": "业务大类"
+    },
+    "PC02BS03": {
+      "english_name": "number_of_accounts",
+      "keyword": null
+    },
+    "PC02BJ02": {
+      "english_name": "balance",
+      "keyword": null
+    },
+    "PC02KS01": {
+      "english_name": "number_of_related_repayment_responsibilities",
+      "keyword": null
+    },
+    "PC02KD01": {
+      "english_name": "borrower_identity_category",
+      "keyword": "身份类别代码表"
+    },
+    "PC02KD02": {
+      "english_name": "type_of_related_repayment_responsibility",
+      "keyword": "相关还款责任人类型代码表"
+    },
+    "PC02KS02": {
+      "english_name": "number_of_accounts",
+      "keyword": null
+    },
+    "PC02KJ01": {
+      "english_name": "repayment_responsibility_limit",
+      "keyword": null
+    },
+    "PC02KJ02": {
+      "english_name": "balance",
+      "keyword": null
+    },
+    "PC02FS01": {
+      "english_name": "number_of_managing_institutions",
+      "keyword": null
+    },
+    "PC02FS02": {
+      "english_name": "number_of_accounts",
+      "keyword": null
+    },
+    "PC02FJ01": {
+      "english_name": "total_credit_limit",
+      "keyword": null
+    },
+    "PC02FJ02": {
+      "english_name": "balance",
+      "keyword": null
+    },
+    "PC02FJ03": {
+      "english_name": "average_repayment_last_6_months",
+      "keyword": null
+    },
+    "PC02GS01": {
+      "english_name": "number_of_managing_institutions",
+      "keyword": null
+    },
+    "PC02GS02": {
+      "english_name": "number_of_accounts",
+      "keyword": null
+    },
+    "PC02GJ01": {
+      "english_name": "total_credit_limit",
+      "keyword": null
+    },
+    "PC02GJ02": {
+      "english_name": "balance",
+      "keyword": null
+    },
+    "PC02GJ03": {
+      "english_name": "average_repayment_last_6_months",
+      "keyword": null
+    },
+    "PC02IS01": {
+      "english_name": "number_of_card_issuing_institutions",
+      "keyword": null
+    },
+    "PC02IS02": {
+      "english_name": "number_of_accounts",
+      "keyword": null
+    },
+    "PC02IJ01": {
+      "english_name": "total_credit_limit",
+      "keyword": null
+    },
+    "PC02IJ02": {
+      "english_name": "highest_credit_limit_per_bank",
+      "keyword": null
+    },
+    "PC02IJ03": {
+      "english_name": "lowest_credit_limit_per_bank",
+      "keyword": null
+    },
+    "PC02IJ04": {
+      "english_name": "overdraft_balance",
+      "keyword": null
+    },
+    "PC02IJ05": {
+      "english_name": "average_overdraft_balance_last_6_months",
+      "keyword": null
+    },
+    "PC02AS01": {
+      "english_name": "total_number_of_accounts",
+      "keyword": null
+    },
+    "PC02AS02": {
+      "english_name": "number_of_business_types",
+      "keyword": null
+    },
+    "PC02AD01": {
+      "english_name": "business_type",
+      "keyword": "业务类型"
+    },
+    "PC02AD02": {
+      "english_name": "business_category",
+      "keyword": "业务大类"
+    },
+    "PC02AS03": {
+      "english_name": "number_of_accounts",
+      "keyword": null
+    },
+    "PC02AR01": {
+      "english_name": "first_business_issue_month",
+      "keyword": null
+    },
+    "PD01AI01": {
+      "english_name": "account_number",
+      "keyword": null
+    },
+    "PD01AD01": {
+      "english_name": "account_type",
+      "keyword": "个人借贷账户类型代码表"
+    },
+    "PD01AD02": {
+      "english_name": "business_management_institution_type",
+      "keyword": "机构类型代码"
+    },
+    "PD01AI02": {
+      "english_name": "business_management_institution_code",
+      "keyword": null
+    },
+    "PD01AI03": {
+      "english_name": "account_identifier",
+      "keyword": null
+    },
+    "PD01AI04": {
+      "english_name": "credit_agreement_number",
+      "keyword": null
+    },
+    "PD01AD03": {
+      "english_name": "business_category",
+      "keyword": "个人借贷交易业务种类代码表"
+    },
+    "PD01AR01": {
+      "english_name": "opening_date",
+      "keyword": null
+    },
+    "PD01AD04": {
+      "english_name": "currency",
+      "keyword": "币种代码表"
+    },
+    "PD01AJ01": {
+      "english_name": "loan_amount",
+      "keyword": null
+    },
+    "PD01AJ02": {
+      "english_name": "account_credit_limit",
+      "keyword": null
+    },
+    "PD01AJ03": {
+      "english_name": "shared_credit_limit",
+      "keyword": null
+    },
+    "PD01AR02": {
+      "english_name": "expiration_date",
+      "keyword": null
+    },
+    "PD01AD05": {
+      "english_name": "repayment_method",
+      "keyword": "个人借贷交易还款方式代码表"
+    },
+    "PD01AD06": {
+      "english_name": "repayment_frequency",
+      "keyword": "个人借贷交易还款频率代码表"
+    },
+    "PD01AS01": {
+      "english_name": "number_of_repayment_periods",
+      "keyword": null
+    },
+    "PD01AD07": {
+      "english_name": "guarantee_method",
+      "keyword": "个人借贷交易担保方式代码表"
+    },
+    "PD01AD08": {
+      "english_name": "loan_disbursement_form",
+      "keyword": "个人贷款发放形式代码表"
+    },
+    "PD01AD09": {
+      "english_name": "joint_loan_flag",
+      "keyword": "个人借贷交易共同借款标志代码表"
+    },
+    "PD01AD10": {
+      "english_name": "repayment_status_at_claim_transfer",
+      "keyword": "债权转移时的还款状态代码表"
+    },
+    "PD01HS01": {
+      "english_name": "number_of_current_effective_special_limits",
+      "keyword": null
+    },
+    "PD01HJ01": {
+      "english_name": "large_special_installment_limit",
+      "keyword": null
+    },
+    "PD01HR01": {
+      "english_name": "installment_limit_effective_date",
+      "keyword": null
+    },
+    "PD01HR02": {
+      "english_name": "installment_limit_expiration_date",
+      "keyword": null
+    },
+    "PD01HJ02": {
+      "english_name": "used_installment_amount",
+      "keyword": null
+    },
+    "latest24state": {
+      "english_name": "24_period_status",
+      "keyword": null
+    },
+    "PD01DR01": {
+      "english_name": "start_year_month",
+      "keyword": null
+    },
+    "PD01DR02": {
+      "english_name": "end_year_month",
+      "keyword": null
+    },
+    "PD01DR03": {
+      "english_name": "month",
+      "keyword": null
+    },
+    "PD01DD01": {
+      "english_name": "repayment_status",
+      "keyword": "个人借贷账户还款状态代码表(D1/R4账户)"
+    },
+    "PD01ER01": {
+      "english_name": "start_year_month",
+      "keyword": null
+    },
+    "PD01ER02": {
+      "english_name": "end_year_month",
+      "keyword": null
+    },
+    "PD01ED01": {
+      "english_name": "repayment_status",
+      "keyword": "区分不了账户类型是R1还是D1\\R4"
+    },
+    "seq1": {
+      "english_name": "serial_number_1",
+      "keyword": null
+    },
+    "PD01ER03": {
+      "english_name": "month",
+      "keyword": null
+    },
+    "PD01EJ01": {
+      "english_name": "total_overdue_overdraft_amount",
+      "keyword": null
+    },
+    "PD01BD01": {
+      "english_name": "account_status",
+      "keyword": "个人借贷账户状态代码表(D1账户)"
+    },
+    "PD01BR01": {
+      "english_name": "closing_date",
+      "keyword": null
+    },
+    "PD01BJ01": {
+      "english_name": "balance",
+      "keyword": null
+    },
+    "PD01BR02": {
+      "english_name": "last_repayment_date",
+      "keyword": null
+    },
+    "PD01BJ02": {
+      "english_name": "last_repayment_amount",
+      "keyword": null
+    },
+    "PD01BD03": {
+      "english_name": "five_level_classification",
+      "keyword": "五级分类代码表"
+    },
+    "PD01BD04": {
+      "english_name": "repayment_status",
+      "keyword": "区分不了账户类型是R1还是D1\\R4"
+    },
+    "PD01BR03": {
+      "english_name": "information_report_date",
+      "keyword": null
+    },
+    "PD01BR04": {
+      "english_name": "transfer_month",
+      "keyword": null
+    },
+    "PD01CR01": {
+      "english_name": "month",
+      "keyword": null
+    },
+    "PD01CD01": {
+      "english_name": "account_status",
+      "keyword": "个人借贷账户状态代码表(R2/R3账户)"
+    },
+    "PD01CJ01": {
+      "english_name": "balance",
+      "keyword": null
+    },
+    "PD01CJ02": {
+      "english_name": "used_credit_limit",
+      "keyword": null
+    },
+    "PD01CJ03": {
+      "english_name": "large_special_installment_balance_not_billed",
+      "keyword": null
+    },
+    "PD01CD02": {
+      "english_name": "five_level_classification",
+      "keyword": "五级分类代码表"
+    },
+    "PD01CS01": {
+      "english_name": "remaining_repayment_periods",
+      "keyword": null
+    },
+    "PD01CR02": {
+      "english_name": "settlement_due_date",
+      "keyword": null
+    },
+    "PD01CJ04": {
+      "english_name": "repayment_due_this_month",
+      "keyword": null
+    },
+    "PD01CJ05": {
+      "english_name": "actual_repayment_this_month",
+      "keyword": null
+    },
+    "PD01CR03": {
+      "english_name": "last_repayment_date",
+      "keyword": null
+    },
+    "PD01CS02": {
+      "english_name": "current_overdue_periods",
+      "keyword": null
+    },
+    "PD01CJ06": {
+      "english_name": "current_total_overdue_amount",
+      "keyword": null
+    },
+    "PD01CJ07": {
+      "english_name": "principal_overdue_31_60_days",
+      "keyword": null
+    },
+    "PD01CJ08": {
+      "english_name": "principal_overdue_61_90_days",
+      "keyword": null
+    },
+    "PD01CJ09": {
+      "english_name": "principal_overdue_91_180_days",
+      "keyword": null
+    },
+    "PD01CJ10": {
+      "english_name": "principal_overdue_over_180_days",
+      "keyword": null
+    },
+    "PD01CJ11": {
+      "english_name": "overdraft_balance_over_180_days",
+      "keyword": null
+    },
+    "PD01CJ12": {
+      "english_name": "average_credit_usage_last_6_months",
+      "keyword": null
+    },
+    "PD01CJ13": {
+      "english_name": "average_overdraft_balance_last_6_months",
+      "keyword": null
+    },
+    "PD01CJ14": {
+      "english_name": "maximum_credit_usage",
+      "keyword": null
+    },
+    "PD01CJ15": {
+      "english_name": "maximum_overdraft_balance",
+      "keyword": null
+    },
+    "PD01CR04": {
+      "english_name": "information_report_date",
+      "keyword": null
+    },
+    "PD01ZS01": {
+      "english_name": "number_of_annotations_and_statements",
+      "keyword": null
+    },
+    "PD01ZD01": {
+      "english_name": "type_of_annotation_or_statement",
+      "keyword": "标注及声明类型代码表"
+    },
+    "PD01ZQ01": {
+      "english_name": "annotation_or_statement_content",
+      "keyword": null
+    },
+    "PD01ZR01": {
+      "english_name": "addition_date",
+      "keyword": null
+    },
+    "PD01GS01": {
+      "english_name": "number_of_special_event_descriptions",
+      "keyword": null
+    },
+    "PD01GR01": {
+      "english_name": "special_event_occurrence_month",
+      "keyword": null
+    },
+    "PD01GD01": {
+      "english_name": "special_event_type",
+      "keyword": "个人借贷交易特殊事件类型代码表"
+    },
+    "PD01FS01": {
+      "english_name": "number_of_special_transactions",
+      "keyword": null
+    },
+    "PD01FD01": {
+      "english_name": "special_transaction_type",
+      "keyword": "个人借贷特殊交易类型代码表"
+    },
+    "PD01FR01": {
+      "english_name": "special_transaction_occurrence_date",
+      "keyword": null
+    },
+    "PD01FS02": {
+      "english_name": "number_of_months_of_due_date_change",
+      "keyword": null
+    },
+    "PD01FJ01": {
+      "english_name": "special_transaction_amount",
+      "keyword": null
+    },
+    "PD01FQ01": {
+      "english_name": "special_transaction_detail_record",
+      "keyword": null
+    },
+    "PD02AI01": {
+      "english_name": "credit_agreement_number",
+      "keyword": null
+    },
+    "PD02AD01": {
+      "english_name": "business_management_institution_type",
+      "keyword": "机构类型代码"
+    },
+    "PD02AI02": {
+      "english_name": "business_management_institution",
+      "keyword": null
+    },
+    "PD02AI03": {
+      "english_name": "credit_agreement_identifier",
+      "keyword": null
+    },
+    "PD02AD02": {
+      "english_name": "credit_limit_purpose",
+      "keyword": "个人授信额度用途代码表"
+    },
+    "PD02AJ01": {
+      "english_name": "credit_limit",
+      "keyword": null
+    },
+    "PD02AD03": {
+      "english_name": "currency",
+      "keyword": "币种代码表"
+    },
+    "PD02AR01": {
+      "english_name": "effective_date",
+      "keyword": null
+    },
+    "PD02AR02": {
+      "english_name": "expiration_date",
+      "keyword": null
+    },
+    "PD02AD04": {
+      "english_name": "credit_agreement_status",
+      "keyword": "个人授信协议状态代码表"
+    },
+    "PD02AI04": {
+      "english_name": "credit_limit_number",
+      "keyword": null
+    },
+    "PD02AJ03": {
+      "english_name": "credit_limit",
+      "keyword": null
+    },
+    "PD02AJ04": {
+      "english_name": "used_credit_limit",
+      "keyword": null
+    },
+    "PD02ZS01": {
+      "english_name": "number_of_annotations_and_statements",
+      "keyword": null
+    },
+    "PD02ZD01": {
+      "english_name": "type_of_annotation_or_statement",
+      "keyword": "标注及声明类型代码表"
+    },
+    "PD02ZQ01": {
+      "english_name": "annotation_or_statement_content",
+      "keyword": null
+    },
+    "PD02ZR01": {
+      "english_name": "addition_date",
+      "keyword": null
+    },
+    "PF05AQ01": {
+      "english_name": "contribution_location",
+      "keyword": "行政区划代码表"
+    },
+    "PF05AR01": {
+      "english_name": "contribution_date",
+      "keyword": null
+    },
+    "PF05AD01": {
+      "english_name": "contribution_status",
+      "keyword": "参缴状态"
+    },
+    "PF05AR02": {
+      "english_name": "initial_contribution_month",
+      "keyword": null
+    },
+    "PF05AR03": {
+      "english_name": "contribution_until_month",
+      "keyword": null
+    },
+    "PF05AQ02": {
+      "english_name": "employer_contribution_ratio",
+      "keyword": null
+    },
+    "PF05AQ03": {
+      "english_name": "personal_contribution_ratio",
+      "keyword": null
+    },
+    "PF05AJ01": {
+      "english_name": "monthly_contribution_amount",
+      "keyword": null
+    },
+    "PF05AQ04": {
+      "english_name": "contributing_unit",
+      "keyword": null
+    },
+    "PF05AR04": {
+      "english_name": "information_update_date",
+      "keyword": null
+    },
+    "PF05ZS01": {
+      "english_name": "number_of_annotations_and_statements",
+      "keyword": null
+    },
+    "PF05ZD01": {
+      "english_name": "type_of_annotation_or_statement",
+      "keyword": "标注及声明类型代码表"
+    },
+    "PF05ZQ01": {
+      "english_name": "annotation_or_statement_content",
+      "keyword": null
+    },
+    "PF05ZR01": {
+      "english_name": "addition_date",
+      "keyword": null
+    },
+    "PF08AQ01": {
+      "english_name": "awarding_institution",
+      "keyword": null
+    },
+    "PF08AQ02": {
+      "english_name": "award_content",
+      "keyword": null
+    },
+    "PF08AR01": {
+      "english_name": "effective_year_month",
+      "keyword": null
+    },
+    "PF08AR02": {
+      "english_name": "end_year_month",
+      "keyword": null
+    },
+    "PF08ZS01": {
+      "english_name": "number_of_annotations_and_statements",
+      "keyword": null
+    },
+    "PF08ZD01": {
+      "english_name": "type_of_annotation_or_statement",
+      "keyword": "标注及声明类型代码表"
+    },
+    "PF08ZQ01": {
+      "english_name": "annotation_or_statement_content",
+      "keyword": null
+    },
+    "PF08ZR01": {
+      "english_name": "addition_date",
+      "keyword": null
+    },
+    "PF04AQ01": {
+      "english_name": "penalizing_institution",
+      "keyword": null
+    },
+    "PF04AQ02": {
+      "english_name": "penalty_content",
+      "keyword": null
+    },
+    "PF04AJ01": {
+      "english_name": "penalty_amount",
+      "keyword": null
+    },
+    "PF04AR01": {
+      "english_name": "penalty_effective_date",
+      "keyword": null
+    },
+    "PF04AR02": {
+      "english_name": "penalty_end_date",
+      "keyword": null
+    },
+    "PF04AQ03": {
+      "english_name": "administrative_review_result",
+      "keyword": null
+    },
+    "PF04ZS01": {
+      "english_name": "number_of_annotations_and_statements",
+      "keyword": null
+    },
+    "PF04ZD01": {
+      "english_name": "type_of_annotation_or_statement",
+      "keyword": "标注及声明类型代码表"
+    },
+    "PF04ZQ01": {
+      "english_name": "annotation_or_statement_content",
+      "keyword": null
+    },
+    "PF04ZR01": {
+      "english_name": "addition_date",
+      "keyword": null
+    },
+    "PF02AQ01": {
+      "english_name": "filing_court",
+      "keyword": null
+    },
+    "PF02AQ02": {
+      "english_name": "case_reason",
+      "keyword": null
+    },
+    "PF02AR01": {
+      "english_name": "filing_date",
+      "keyword": null
+    },
+    "PF02AD01": {
+      "english_name": "case_closure_method",
+      "keyword": "民事判决结案方式代码表"
+    },
+    "PF02AQ03": {
+      "english_name": "judgment_mediation_result",
+      "keyword": null
+    },
+    "PF02AR02": {
+      "english_name": "judgment_mediation_effective_date",
+      "keyword": null
+    },
+    "PF02AQ04": {
+      "english_name": "litigation_subject",
+      "keyword": null
+    },
+    "PF02AJ01": {
+      "english_name": "litigation_subject_amount",
+      "keyword": null
+    },
+    "PF02ZS01": {
+      "english_name": "number_of_annotations_and_statements",
+      "keyword": null
+    },
+    "PF02ZD01": {
+      "english_name": "type_of_annotation_or_statement",
+      "keyword": "标注及声明类型代码表"
+    },
+    "PF02ZQ01": {
+      "english_name": "annotation_or_statement_content",
+      "keyword": null
+    },
+    "PF02ZR01": {
+      "english_name": "addition_date",
+      "keyword": null
+    },
+    "PF07AQ01": {
+      "english_name": "professional_qualification_name",
+      "keyword": null
+    },
+    "PF07AQ02": {
+      "english_name": "issuing_institution",
+      "keyword": null
+    },
+    "PF07AD01": {
+      "english_name": "level",
+      "keyword": "职业资格等级代码表"
+    },
+    "PF07AD02": {
+      "english_name": "institution_location",
+      "keyword": "行政区划代码表"
+    },
+    "PF07AR01": {
+      "english_name": "acquisition_year_month",
+      "keyword": null
+    },
+    "PF07AR02": {
+      "english_name": "expiration_year_month",
+      "keyword": null
+    },
+    "PF07AR03": {
+      "english_name": "revocation_year_month",
+      "keyword": null
+    },
+    "PF07ZS01": {
+      "english_name": "number_of_annotations_and_statements",
+      "keyword": null
+    },
+    "PF07ZD01": {
+      "english_name": "type_of_annotation_or_statement",
+      "keyword": "标注及声明类型代码表"
+    },
+    "PF07ZQ01": {
+      "english_name": "annotation_or_statement_content",
+      "keyword": null
+    },
+    "PF07ZR01": {
+      "english_name": "addition_date",
+      "keyword": null
+    },
+    "PF03AQ01": {
+      "english_name": "enforcing_court",
+      "keyword": null
+    },
+    "PF03AQ02": {
+      "english_name": "enforcement_case_reason",
+      "keyword": null
+    },
+    "PF03AR01": {
+      "english_name": "filing_date",
+      "keyword": null
+    },
+    "PF03AD01": {
+      "english_name": "case_closure_method",
+      "keyword": "强制执行结案方式代码表"
+    },
+    "PF03AQ03": {
+      "english_name": "case_status",
+      "keyword": null
+    },
+    "PF03AR02": {
+      "english_name": "case_closure_date",
+      "keyword": null
+    },
+    "PF03AQ04": {
+      "english_name": "enforcement_subject",
+      "keyword": null
+    },
+    "PF03AJ01": {
+      "english_name": "enforcement_subject_amount",
+      "keyword": null
+    },
+    "PF03AQ05": {
+      "english_name": "executed_subject",
+      "keyword": null
+    },
+    "PF03AJ02": {
+      "english_name": "executed_subject_amount",
+      "keyword": null
+    },
+    "PF03ZS01": {
+      "english_name": "number_of_annotations_and_statements",
+      "keyword": null
+    },
+    "PF03ZD01": {
+      "english_name": "type_of_annotation_or_statement",
+      "keyword": "标注及声明类型代码表"
+    },
+    "PF03ZQ01": {
+      "english_name": "annotation_or_statement_content",
+      "keyword": null
+    },
+    "PF03ZR01": {
+      "english_name": "addition_date",
+      "keyword": null
+    },
+    "PF06AD01": {
+      "english_name": "personnel_category",
+      "keyword": "低保救助人员类别代码表"
+    },
+    "PF06AQ01": {
+      "english_name": "location",
+      "keyword": "行政区划代码表"
+    },
+    "PF06AQ02": {
+      "english_name": "employer",
+      "keyword": null
+    },
+    "PF06AQ03": {
+      "english_name": "household_monthly_income",
+      "keyword": null
+    },
+    "PF06AR01": {
+      "english_name": "application_date",
+      "keyword": null
+    },
+    "PF06AR02": {
+      "english_name": "approval_date",
+      "keyword": null
+    },
+    "PF06AR03": {
+      "english_name": "information_update_date",
+      "keyword": null
+    },
+    "PF06ZS01": {
+      "english_name": "number_of_annotations_and_statements",
+      "keyword": null
+    },
+    "PF06ZD01": {
+      "english_name": "type_of_annotation_or_statement",
+      "keyword": "标注及声明类型代码表"
+    },
+    "PF06ZQ01": {
+      "english_name": "annotation_or_statement_content",
+      "keyword": null
+    },
+    "PF06ZR01": {
+      "english_name": "addition_date",
+      "keyword": null
+    },
+    "PF01AQ01": {
+      "english_name": "responsible_tax_authority",
+      "keyword": null
+    },
+    "PF01AJ01": {
+      "english_name": "total_tax_arrears",
+      "keyword": null
+    },
+    "PF01AR01": {
+      "english_name": "tax_arrears_statistics_date",
+      "keyword": null
+    },
+    "PF01ZS01": {
+      "english_name": "number_of_annotations_and_statements",
+      "keyword": null
+    },
+    "PF01ZD01": {
+      "english_name": "type_of_annotation_or_statement",
+      "keyword": "标注及声明类型代码表"
+    },
+    "PF01ZQ01": {
+      "english_name": "annotation_or_statement_content",
+      "keyword": null
+    },
+    "PF01ZR01": {
+      "english_name": "addition_date",
+      "keyword": null
+    },
+    "PE01AD01": {
+      "english_name": "postpaid_account_type_TE_telecom_payment_account",
+      "keyword": "后付费账户类型代码表"
+    },
+    "PE01AQ01": {
+      "english_name": "institution_name",
+      "keyword": null
+    },
+    "PE01AD02": {
+      "english_name": "business_type",
+      "keyword": "电信缴费业务类型代码表"
+    },
+    "PE01AR01": {
+      "english_name": "business_activation_date",
+      "keyword": null
+    },
+    "PE01AD03": {
+      "english_name": "current_payment_status",
+      "keyword": "电信缴费账户最近24个月缴费状态代码表"
+    },
+    "PE01AJ01": {
+      "english_name": "current_outstanding_amount",
+      "keyword": null
+    },
+    "PE01AR02": {
+      "english_name": "accounting_year_month",
+      "keyword": null
+    },
+    "PE01AQ02": {
+      "english_name": "payment_record_last_24_months",
+      "keyword": null
+    },
+    "PE01ZS01": {
+      "english_name": "number_of_annotations_and_statements",
+      "keyword": null
+    },
+    "PE01ZD01": {
+      "english_name": "type_of_annotation_or_statement",
+      "keyword": "标注及声明类型代码表"
+    },
+    "PE01ZQ01": {
+      "english_name": "annotation_or_statement_content",
+      "keyword": null
+    },
+    "PE01ZR01": {
+      "english_name": "addition_date",
+      "keyword": null
+    },
+    "PG010D01": {
+      "english_name": "object_type",
+      "keyword": "标注及声明对象类型代码表"
+    },
+    "PG010D02": {
+      "english_name": "object_identifier",
+      "keyword": "标注及声明对象标识代码表"
+    },
+    "PG010S01": {
+      "english_name": "number_of_annotations_and_statements",
+      "keyword": null
+    },
+    "PG010D03": {
+      "english_name": "type_of_annotation_or_statement",
+      "keyword": "标注及声明类型代码表"
+    },
+    "PG010Q01": {
+      "english_name": "annotation_or_statement_content",
+      "keyword": null
+    },
+    "PG010R01": {
+      "english_name": "addition_date",
+      "keyword": null
+    },
+    "PD03AD01": {
+      "english_name": "business_management_institution_type",
+      "keyword": "机构类型代码"
+    },
+    "PD03AQ01": {
+      "english_name": "business_management_institution",
+      "keyword": null
+    },
+    "PD03AD02": {
+      "english_name": "business_category",
+      "keyword": "企业借贷业务大类代码表"
+    },
+    "PD03AR01": {
+      "english_name": "opening_date",
+      "keyword": null
+    },
+    "PD03AR02": {
+      "english_name": "expiration_date",
+      "keyword": null
+    },
+    "PD03AD03": {
+      "english_name": "type_of_related_repayment_responsible_person",
+      "keyword": "相关还款责任人类型代码表"
+    },
+    "PD03AJ01": {
+      "english_name": "related_repayment_responsibility_limit",
+      "keyword": null
+    },
+    "PD03AD04": {
+      "english_name": "currency",
+      "keyword": "币种代码表"
+    },
+    "PD03AJ02": {
+      "english_name": "balance",
+      "keyword": null
+    },
+    "PD03AD05": {
+      "english_name": "five_level_classification",
+      "keyword": "五级分类代码表"
+    },
+    "PD03AD06": {
+      "english_name": "account_type",
+      "keyword": "个人借贷账户类型代码表"
+    },
+    "PD03AD07": {
+      "english_name": "repayment_status",
+      "keyword": "不确定是哪种还款状态码表"
+    },
+    "PD03AD08": {
+      "english_name": "borrower_identity_category",
+      "keyword": "身份类别代码表"
+    },
+    "PD03AS01": {
+      "english_name": "number_of_overdue_months",
+      "keyword": null
+    },
+    "PD03AR03": {
+      "english_name": "information_report_date",
+      "keyword": null
+    },
+    "PD03AQ02": {
+      "english_name": "guarantee_contract_number",
+      "keyword": null
+    },
+    "PD03ZS01": {
+      "english_name": "number_of_annotations_and_statements",
+      "keyword": null
+    },
+    "PD03ZD01": {
+      "english_name": "type_of_annotation_or_statement",
+      "keyword": "标注及声明类型代码表"
+    },
+    "PD03ZQ01": {
+      "english_name": "annotation_or_statement_content",
+      "keyword": null
+    },
+    "PD03ZR01": {
+      "english_name": "addition_date",
+      "keyword": null
+    },
+    "PH010R01": {
+      "english_name": "query_date",
+      "keyword": null
+    },
+    "PH010D01": {
+      "english_name": "business_management_institution_type",
+      "keyword": "机构类型代码"
+    },
+    "PH010Q02": {
+      "english_name": "querying_institution",
+      "keyword": null
+    },
+    "PH010Q03": {
+      "english_name": "query_reason",
+      "keyword": "查询原因代码"
+    },
+    "PC010Q01": {
+      "english_name": "numerical_interpretation",
+      "keyword": null
+    },
+    "PC010Q02": {
+      "english_name": "relative_position",
+      "keyword": null
+    },
+    "PC010S01": {
+      "english_name": "number_of_score_explanations",
+      "keyword": null
+    },
+    "PC010D01": {
+      "english_name": "score_explanation",
+      "keyword": null
+    }
+  },
+  "code_values": {
+    "个人证件类型代码表": {
+      "1": "household_book",
+      "2": "passport",
+      "5": "mainland_travel_permit_for_HK_and_Macao_Resident",
+      "6": "mainland_travel_permit_for_Taiwan_Resident",
+      "8": "residence_permit",
+      "9": "police_officer_id",
+      "A": "hong_kong_id",
+      "B": "macao_id",
+      "C": "taiwan_id",
+      "X": "other_documents",
+      "10": "id_card",
+      "20": "military_id"
+    },
+    "查询原因代码": {
+      "1": "post-loan_management",
+      "2": "loan_approval",
+      "3": "credit_card_approval",
+      "8": "guarantee_eligibility_review",
+      "9": "judicial_investigation",
+      "16": "provident_fund_withdrawal_review_inquiry",
+      "18": "stock_index_futures_account_opening",
+      "19": "special_merchant_real_name_review",
+      "20": "pre-guarantee_review",
+      "21": "post-guarantee_management",
+      "22": "credit_review_of_legal_representatives_principals_executives",
+      "23": "customer_access_qualification_review",
+      "24": "financing_approval",
+      "25": "credit_review",
+      "26": "quota_approval"
+    },
+    "居住状况代码表": {
+      "1": "self-owned",
+      "2": "mortgage",
+      "3": "relative_property",
+      "4": "collective_dormitory",
+      "5": "rent_house",
+      "6": "shared_residence",
+      "7": "other",
+      "11": "self-owned",
+      "12": "borrowed",
+      "9": "unknown"
+    },
+    "单位性质代码表": {
+      "10": "government_organs_and_public_institutions",
+      "20": "state_owned_enterprise",
+      "30": "foreign_funded_enterprise",
+      "40": "individual_private_enterprise",
+      "50": "other",
+      "99": "unknown"
+    },
+    "职业代码表": {
+      "0": "heads_of_state_organs_party_organizations_enterprises_and_public_institutions",
+      "1": "professional_technical_staff",
+      "3": "clerical_and_related_staff",
+      "4": "commercial_service_staff",
+      "5": "production_personnel_in_agriculture_forestry_animal_husbandry_fishing_and_water_industry",
+      "6": "production_and_transportation_equipment_operators_and_related_personnel",
+      "X": "military_personnel",
+      "Y": "other_practitioners_not_easily_classified",
+      "Z": "unknown"
+    },
+    "职务代码表": {
+      "1": "senior_leader",
+      "2": "middle_leader",
+      "3": "general_staff",
+      "4": "other",
+      "9": "unknown"
+    },
+    "职称代码表": {
+      "0": "none",
+      "1": "senior",
+      "2": "middle",
+      "3": "junior",
+      "9": "unknown"
+    },
+    "分数影响因素说明代码表": {
+      "0": "no_influencing_factors",
+      "1": "existence_of_overdue_repayment_record",
+      "2": "existence_of_extension_record",
+      "3": "high_current_debt",
+      "4": "high_number_of_current_credit_card_debt ",
+      "5": "high_number_of_current_debt",
+      "6": "high_current_credit_card_limit_utilization",
+      "7": "short_credit_history",
+      "8": "short_credit_card_history",
+      "9": "high_number_of_recent_debt_additions",
+      "10": "High_number_of_recent_hard_inquiries",
+      "11": "no_recent_credit_activity",
+      "12": "homogenous_credit_activity",
+      "13": "insufficient_recent_credit_card_info",
+      "14": "insufficient_recent_loan_info",
+      "15": "insufficient_recent_credit_info",
+      "16": "limited_debt_variety",
+      "91": "no_credit_record",
+      "92": "credit_history_less_than_3_months",
+      "93": "missing_recent_2_years_credit_info",
+      "99": "other"
+    },
+    "个人借贷交易业务种类代码表": {
+      "11": "personal_housing_commercial_loan",
+      "12": "personal_commercial_property_loan",
+      "13": "personal_housing_fund_loan",
+      "21": "personal_auto_consumer_loan",
+      "31": "personal_student_loan",
+      "32": "national_student_loan",
+      "33": "commercial_student_loan",
+      "41": "personal_business_loan",
+      "42": "personal_startup_guarantee_loan",
+      "51": "farmer_loan",
+      "52": "business_farmer_loan",
+      "53": "consumer_farmer_loan",
+      "71": "quasi_credit_card",
+      "81": "credit_card",
+      "82": "large_specialized_installment_card",
+      "91": "other_personal_consumer_loan",
+      "92": "financial_leasing_business",
+      "99": "other_loans",
+      "61": "agreed_repurchase_securities_transaction",
+      "62": "stock_pledge_repurchase_transaction",
+      "63": "margin_trading",
+      "64": "other_securities_financing",
+      "A1": "asset_disposal",
+      "B1": "debt_repayment"
+    },
+    "个人借贷交易还款方式代码表": {
+      "11": "installment_equal_principal_interest",
+      "12": "installment_equal_principal",
+      "13": "principal_repayment_maturity_with_interest_installments",
+      "14": "equal_proportion_progressive_ instalment_repayment",
+      "15": "equal_progressive_ instalment_repayment",
+      "19": "other_installment_repayment",
+      "21": "principal_and_interest_repayment_lump_sum_at_maturity",
+      "22": "interest_prepayment_and_principal_repayment_at_maturity",
+      "23": "repayment_at_any_time",
+      "29": "other_non_installment_repayment",
+      "31": "periodic_interest_and_principal_repayment_maturity",
+      "32": "periodic_interest_and_flexible_principal_repayment",
+      "33": "periodic_principal_interest_repayment",
+      "39": "other_repayment_under_revolving_loan",
+      "90": "no_repayment_method_distinction"
+    },
+    "个人借贷交易还款频率代码表": {
+      "1": "day",
+      "2": "week",
+      "3": "month",
+      "4": "quarter",
+      "5": "half_year",
+      "6": "year",
+      "7": "one_time",
+      "8": "irregular",
+      "12": "ten_days",
+      "13": "biweekly",
+      "14": "bimonthly",
+      "99": "other"
+    },
+    "个人贷款发放形式代码表": {
+      "1": "new",
+      "5": "transferred_from_other_institutions"
+    },
+    "个人借贷交易担保方式代码表": {
+      "1": "pledge",
+      "2": "mortgage",
+      "3": "guarantee",
+      "4": "credit",
+      "5": "combination_with_guarantee",
+      "6": "combination_without_guarantee",
+      "7": "farmer_joint_guarantee",
+      "9": "other"
+    },
+    "个人借贷交易共同借款标志代码表": {
+      "0": "no_co-borrower",
+      "1": "primary_borrower",
+      "2": "secondary_borrower"
+    },
+    "债权转移时的还款状态代码表": {
+      "0": "automatic_advance_on_impending_default",
+      "1": "overdue_1-30_days",
+      "2": "overdue_31-60_days",
+      "3": "overdue_61-90_days",
+      "4": "overdue_91-120_days",
+      "5": "overdue_121-150_days",
+      "6": "overdue_151-180_days",
+      "7": "overdue_more_than_180_days",
+      "9": "unknown"
+    },
+    "个人借贷账户状态代码表(D1账户)": {
+      "1": "normal",
+      "2": "overdue",
+      "3": "settled",
+      "4": "bad_debt",
+      "5": "transferred",
+      "6": "insufficient_collateral",
+      "7": "forced_liquidation",
+      "8": "judicial_recovery"
+    },
+    "个人借贷账户状态代码表(R1账户)": {
+      "1": "normal",
+      "2": "overdue",
+      "3": "settled",
+      "4": "bad_debt",
+      "5": "bank_stop_payment",
+      "6": "insufficient_collateral",
+      "8": "judicial_recovery"
+    },
+    "个人借贷账户状态代码表(R2/R3账户)": {
+      "1": "normal",
+      "2": "frozen",
+      "3": "stop_payment",
+      "31": "bank_stop_payment",
+      "4": "account_closure",
+      "5": "bad_debt",
+      "6": "not_activated",
+      "8": "judicial_recovery"
+    },
+    "个人借贷账户状态代码表(R4账户)": {
+      "1": "normal",
+      "2": "overdue",
+      "3": "settled",
+      "4": "bad_debt",
+      "6": "insufficient_collateral",
+      "8": "judicial_recovery"
+    },
+    "个人借贷账户状态代码表(C1账户)": {
+      "1": "collection",
+      "2": "closed"
+    },
+    "五级分类代码表": {
+      "1": "normal",
+      "2": "special_mention",
+      "3": "substandard",
+      "4": "doubtful",
+      "5": "loss",
+      "6": "default",
+      "9": "unclassified"
+    },
+    "个人借贷账户还款状态代码表(D1/R4账户)": {
+      "*": "no_repayment_required_current_month_and_no_previous_arrears",
+      "N": "normal_repayment",
+      "D": "guarantor_repayment",
+      "Z": "repay_debts_with_capital",
+      "M": "repayment_by_end_of_month_after_agreed_repayment_date",
+      "1": "overdue_1-30_days",
+      "2": "overdue_31-60_days",
+      "3": "overdue_61-90_days",
+      "4": "overdue_91-120_days",
+      "5": "overdue_121-150_days",
+      "6": "overdue_151-180_days",
+      "7": "overdue_more_than_180_days",
+      "B": "bad_debt",
+      "C": "settled",
+      "G": "terminated",
+      "#": "unknown"
+    },
+    "个人借贷账户还款状态代码表(R1账户)": {
+      "*": "unused_credit_current_month_and_no_repayment_required",
+      "N": "normal_repayment",
+      "D": "guarantor_repayment",
+      "Z": "repay_debts_with_capital",
+      "M": "repayment_by_end_of_month_after_agreed_repayment_date",
+      "1": "overdue_1-30_days",
+      "2": "overdue_31-60_days",
+      "3": "overdue_61-90_days",
+      "4": "overdue_91-120_days",
+      "5": "overdue_121-150_days",
+      "6": "overdue_151-180_days",
+      "7": "overdue_more_than_180_days",
+      "B": "bad_debt",
+      "C": "normal_account_closure",
+      "G": "terminated",
+      "#": "unknown"
+    },
+    "个人借贷账户还款状态代码表(R2账户)": {
+      "*": "unused_credit_current_month_and_no_repayment_required",
+      "N": "normal_repayment",
+      "A": "billing_date_adjustment_no_billing_current_month",
+      "1": "overdue_1-30_days",
+      "2": "overdue_31-60_days",
+      "3": "overdue_61-90_days",
+      "4": "overdue_91-120_days",
+      "5": "overdue_121-150_days",
+      "6": "overdue_151-180_days",
+      "7": "overdue_more_than_180_days",
+      "B": "bad_debt",
+      "C": "normal_account_closure",
+      "G": "terminated",
+      "#": "unknown"
+    },
+    "个人借贷账户还款状态代码表(R3账户)": {
+      "*": "no_overdraft_current_month_and_no overdraft_balance_last month",
+      "N": "normal",
+      "1": "overdraft_1-30_days",
+      "2": "overdraft_31-60_days",
+      "3": "overdraft_61-90_days",
+      "4": "overdraft_91-120_days",
+      "5": "overdraft_121-150_days",
+      "6": "overdraft_151-180_days",
+      "7": "overdraft_more_than_180_days",
+      "B": "bad_debt",
+      "C": "normal_account_closure",
+      "G": "terminated",
+      "#": "unknown"
+    },
+    "个人借贷特殊交易类型代码表": {
+      "1": "extension",
+      "2": "guarantor_repayment",
+      "3": "repay_debts_with_capital",
+      "4": "early_repayment",
+      "5": "early_settlement",
+      "6": "forced_liquidation_and_not_settled",
+      "7": "forced_liquidation_and_settled",
+      "8": "judicial_recovery",
+      "9": "other",
+      "11": "debt_reduction",
+      "12": "asset_stripping",
+      "13": "asset_transfer",
+      "14": "personalized_credit_card_installment",
+      "16": "bank_initiated_extension",
+      "17": "forced_liquidation"
+    },
+    "个人借贷交易特殊事件类型代码表": {
+      "11": "billing_date_adjustment_no_billing_current_month",
+      "12": "reactivated_canceled_credit_card_account"
+    },
+    "个人授信额度用途代码表": {
+      "10": "revolving_loan_amount",
+      "20": "non_revolving_loan_amount",
+      "30": "shared_credit_card_amount",
+      "31": "individual_credit_card_amount"
+    },
+    "个人授信协议状态代码表": {
+      "1": "valid",
+      "2": "expired/invalid"
+    },
+    "企业借贷业务大类代码表": {
+      "10": "corporate_debt",
+      "11": "loan",
+      "12": "trade_financing",
+      "13": "factoring_financing",
+      "14": "financial_leasing",
+      "15": "securities_financing",
+      "16": "overdraft",
+      "21": "bill_discounting",
+      "31": "gold_loan",
+      "41": "advance_payment",
+      "51": "asset_disposal"
+    },
+    "相关还款责任人类型代码表": {
+      "1": "co-borrower",
+      "2": "guarantor",
+      "3": "bill_acceptor",
+      "4": "accounts_receivable_debtor",
+      "5": "core_enterprise_in_supply_chain",
+      "9": "other"
+    },
+    "电信缴费业务类型代码表": {
+      "1": "fixed_phone",
+      "2": "mobile_phone",
+      "3": "internet_access",
+      "4": "data_dedicated_line_and_cluster_services",
+      "5": "satellite_services",
+      "6": "combined_services",
+      "0": "other_services"
+    },
+    "公共事业缴费业务类型代码表": {
+      "2": "water_bill"
+    },
+    "后付费业务当前缴费状态代码表": {
+      "0": "normal",
+      "1": "arrears"
+    },
+    "电信缴费账户最近24个月缴费状态代码表": {
+      "#": "unknown",
+      "*": "service_active_no_payment_due",
+      "N": "normal",
+      "0": "arrears_over_grace_period_less_than_1_month",
+      "1": "arrears_over_grace_period_1_to_2_months",
+      "2": "arrears_over_grace_period_2_to_3_months",
+      "3": "arrears_over_grace_period_3_to_4_months",
+      "4": "arrears_over_grace_period_4_to_5_months",
+      "5": "arrears_over_grace_period_5_to_6_months",
+      "6": "arrears_over_grace_period_more_than_6_months",
+      "C": "account_closure",
+      "G": "terminated"
+    },
+    "民事判决结案方式代码表": {
+      "1": "judgment",
+      "2": "mediation",
+      "3": "other"
+    },
+    "强制执行结案方式代码表": {
+      "1": "non_enforcement",
+      "2": "voluntary_compliance",
+      "3": "settlement_completed",
+      "4": "enforcement_completed",
+      "5": "termination_of_enforcement",
+      "6": "elevated_enforcement",
+      "7": "designated_enforcement",
+      "255": "other"
+    },
+    "住房公积金缴费状态代码表": {
+      "1": "active",
+      "2": "dormant",
+      "3": "account_closure"
+    },
+    "低保救助人员类别代码表": {
+      "1": "employed_staff",
+      "2": "off_post",
+      "3": "unemployed",
+      "4": "retired_personnel",
+      "5": "three_no_personnel",
+      "6": "resident",
+      "7": "student"
+    },
+    "职业资格等级代码表": {
+      "1": "national_institution_or_industry_association_certificate",
+      "2": "provincial_or_municipal_institution_or_industry_association_certificate",
+      "3": "prefectural_institution_or_industry_association_certificate",
+      "4": "independent_industry_association_or_standard_setting_enterprise_certificate",
+      "5": "other_institution_certificate"
+    },
+    "世界各国和地区名称代码": {
+      "AFG": "Afghanistan",
+      "ALB": "Albania",
+      "ARM": "Armenia",
+      "OTH": "Other_regions",
+      "991": "China_including_Hong_Kong_Macau_Taiwan",
+      "992": "Foreign_excluding_Hong_Kong_Macau_Taiwan",
+      "999": "Unknown"
+    },
+    "币种代码表": {
+      "ADP": "andorran_peseta",
+      "AED": "uae_dirham",
+      "AFA": "afghani",
+      "ALL": "lek",
+      "AMD": "armenian_dram",
+      "ZWD": "zimbabwe_dollar",
+      "USD": "us_dollar",
+      "SGD": "singapore_dollar",
+      "NZD": "new_zealand_dollar",
+      "MOP": "macanese_pataca",
+      "JPY": "japanese_yen",
+      "HKD": "hong_kong_dollar",
+      "GBP": "british_pound",
+      "EUR": "euro",
+      "CNY": "chinese_yuan",
+      "CHF": "swiss_franc",
+      "CAD": "canadian_dollar",
+      "AUD": "australian_dollar"
+    },
+    "性别代码表": {
+      "0": "unknown",
+      "1": "male",
+      "2": "female",
+      "9": "not_specified"
+    },
+    "学历代码表": {
+      "10": "graduate",
+      "20": "undergraduate",
+      "30": "junior_college",
+      "40": "secondary_vocational_school",
+      "60": "high_school",
+      "90": "other",
+      "91": "junior_high_and_below",
+      "99": "unknown"
+    },
+    "学位代码表": {
+      "1": "honorary_doctorate",
+      "2": "doctorate",
+      "3": "master's_degree",
+      "4": "bachelor's_degree",
+      "5": "none",
+      "9": "unknown"
+    },
+    "就业状况代码表": {
+      "11": "national_civil_servant",
+      "13": "professional_technical_personnel",
+      "17": "staff",
+      "21": "enterprise_manager",
+      "24": "worker",
+      "27": "farmer",
+      "31": "student",
+      "37": "active_duty_military",
+      "51": "freelancer",
+      "54": "self_employed",
+      "70": "unemployed",
+      "80": "retired",
+      "90": "other",
+      "91": "employed",
+      "99": "unknown"
+    },
+    "婚姻状况代码表": {
+      "10": "single",
+      "20": "married",
+      "30": "widowed",
+      "40": "divorced",
+      "91": "single",
+      "99": "unknown"
+    },
+    "国民经济行业代码表": {
+      "A": "agriculture_forestry_animal_husbandry_fishery",
+      "B": "mining",
+      "C": "manufacturing",
+      "D": "production_supply_electricity_heat_gas_water",
+      "E": "construction",
+      "F": "wholesale_retail_trade",
+      "G": "transportation_storage_postal_services",
+      "H": "accommodation_catering",
+      "I": "information_transmission_software_information_technology_services",
+      "J": "finance",
+      "K": "real_estate",
+      "L": "leasing_business_services",
+      "M": "scientific_research_technical_services",
+      "N": "water_conservancy_environment_public_facilities_management",
+      "O": "resident_services_repairs_other_services",
+      "P": "education",
+      "Q": "health_social_work",
+      "R": "culture_sports_entertainment",
+      "S": "public_administration_social_security_social_organizations",
+      "T": "international_organizations",
+      "9": "unknown"
+    },
+    "防欺诈警示标志代码表": {
+      "0": "no",
+      "1": "yes"
+    },
+    "业务类型": {
+      "11": "personal_housing_loan",
+      "12": "personal_commercial_property_loan_including_mixed_use_property",
+      "19": "other_loans",
+      "21": "credit",
+      "22": "quasi_credit_card",
+      "99": "others"
+    },
+    "业务大类": {
+      "1": "loan",
+      "2": "credit_card",
+      "9": "others"
+    },
+    "标注及声明类型代码表": {
+      "1": "dispute_annotation",
+      "2": "special_annotation",
+      "3": "personal_statement",
+      "4": "organization_statement",
+      "5": "credit_bureau_statement"
+    },
+    "参缴状态": {
+      "1": "active (indicating the account is active)",
+      "2": "dormant",
+      "3": "closed"
+    },
+    "标注及声明对象类型代码表": {
+      "1": "report",
+      "2": "data_block"
+    },
+    "标注及声明对象标识代码表": {
+      "1": "report",
+      "201": "identity_information",
+      "202": "marital_information",
+      "203": "residential_information",
+      "204": "occupational_information"
+    },
+    "身份类别代码表": {
+      "1": "natural_person",
+      "2": "organizational_institution"
+    },
+    "查询原因代码表": {
+      "1": "post_loan_management",
+      "2": "loan_approval",
+      "3": "credit_card_approval",
+      "8": "guarantee_review",
+      "9": "judicial_investigation",
+      "16": "provident_fund_re_review_query",
+      "18": "futures_account_opening",
+      "19": "designated_merchant_real_name_review",
+      "20": "pre_insurance_review",
+      "21": "post_insurance_management",
+      "22": "legal_representative_executive_credit_review",
+      "23": "customer_admission_review",
+      "24": "financing_approval",
+      "25": "credit_review",
+      "26": "quota_approval"
+    },
+    "个人信贷交易提示业务类型代码表": {
+      "11": "personal_housing_loan",
+      "12": "personal_commercial_housing_loan",
+      "19": "other_type_of_loan",
+      "21": "credit_card",
+      "22": "quasi_credit_card",
+      "99": "other"
+    },
+    "个人信贷交易提示业务大类代码表": {
+      "1": "loan",
+      "2": "credit_card",
+      "9": "other"
+    },
+    "个人被追偿汇总信息业务类型代码表": {
+      "1": "asset_disposal_business",
+      "2": "advance_business"
+    },
+    "个人逾期（透支）汇总信息账户类型代码表": {
+      "1": "non_closing_loan_account",
+      "2": "sub_account_under_revolving_limit",
+      "3": "revolving_loan_account",
+      "4": "credit_card_account",
+      "5": "quasi_credit_card_account"
+    },
+    "个人 借贷交易相关还款责任类型代码表": {
+      "1": "guarantee_liability",
+      "9": "other_related_repayment_liability"
+    },
+    "后付费业务类型代码表": {
+      "1": "telecom_business",
+      "2": "water_supply_business"
+    },
+    "公共信息类型代码表": {
+      "1": "tax_arrears_information",
+      "2": "civil_judgment_information",
+      "3": "enforcement_information",
+      "4": "administrative_penalty_information"
+    },
+    "机构类型代码": {
+      "11": "commercial_bank",
+      "12": "rural_bank",
+      "14": "housing_savings_bank",
+      "15": "foreign_bank",
+      "16": "finance_company",
+      "21": "trust_company",
+      "22": "finance_leasing_company",
+      "23": "auto_finance_company",
+      "24": "consumer_finance_company",
+      "25": "loan_company",
+      "26": "asset_management_company",
+      "31": "securities_company",
+      "41": "insurance_company",
+      "51": "microloan_company",
+      "52": "housing_fund_management_center",
+      "53": "financing_guarantee_company",
+      "54": "factoring_company",
+      "99": "other_institution"
+    },
+    "个人借贷账户类型代码表": {
+      "D1": "non-revolving_loan_account",
+      "R1": "revolving_loan_account",
+      "R2": "credit_card_account",
+      "R3": "quasi_credit_card_account",
+      "R4": "sub_account_under_revolving_limit",
+      "C1": "collection_account"
+    },
+    "个人借贷业务大类代码表": {
+      "1": "loan",
+      "2": "credit_card",
+      "3": "securities_financing",
+      "4": "financial_leasing",
+      "5": "asset_disposal",
+      "6": "advance_funding"
+    },
+    "后付费账户类型代码表": {
+      "TE": "电信相关缴费账户",
+      "UE": "公用事业相关缴费账户"
+    },
+    "行政区划代码表": {
+      "110000": "Beijing",
+      "120000": "Tianjin",
+      "130000": "Hebei",
+      "710000": "Taiwan Province",
+      "810000": "Hong Kong SAR",
+      "820000": "Macao SAR",
+      "130103": "Former Qiaodong District",
+      "320304": "Former Jiuli District"
+    }
+  },
+  "metadata": {
+    "field_count": 360,
+    "code_value_keywords": 69,
+    "total_code_values": 533
+  }
+}

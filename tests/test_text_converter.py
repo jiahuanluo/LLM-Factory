@@ -3,13 +3,13 @@ from credit_report_converter.text_converter import TextConverter
 from credit_report_converter.field_mapper import FieldMapper
 
 
-@pytest.fixture
+JSON_DICT_PATH = "moc_data/credit_report_dict.json"
+
+
+@pytest.fixture(scope="module")
 def converter():
-    """创建转换器fixture"""
-    mapper = FieldMapper(
-        field_dict_path="moc_data/个人征信DB表结构字典.xlsx",
-        code_value_path="moc_data/个人征信码值表.xlsx"
-    )
+    """创建转换器fixture（使用JSON字典）"""
+    mapper = FieldMapper(json_path=JSON_DICT_PATH)
     return TextConverter(field_mapper=mapper)
 
 
