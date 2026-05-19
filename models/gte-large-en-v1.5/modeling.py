@@ -377,6 +377,7 @@ class NewEmbeddings(nn.Module):
                     attention_mask[i, l:] = 0
 
         # Set attention_mask_bool for unpadding
+        attention_mask_bool = None
         if unpad_inputs:
             attention_mask_bool = attention_mask.bool()
             if length is None:
@@ -384,12 +385,10 @@ class NewEmbeddings(nn.Module):
 
         # Get word embeddings
         if inputs_embeds is None:
-            if unpad_inputs:
-                input_ids = input_ids[attention_mask_bool].unsqueeze(0)
+            input_ids = self._maybe_unpad(input_ids, attention_mask_bool, unpad_inputs)
             inputs_embeds = self.word_embeddings(input_ids)
         else:
-            if unpad_inputs:
-                inputs_embeds = inputs_embeds[attention_mask_bool].unsqueeze(0)
+            inputs_embeds = self._maybe_unpad(inputs_embeds, attention_mask_bool, unpad_inputs)
         embeddings = inputs_embeds
 
         # Set and unpad position_ids
@@ -422,8 +421,7 @@ class NewEmbeddings(nn.Module):
             else:
                 if self.type_vocab_size < 2:
                     token_type_ids.mul_(0)
-                if unpad_inputs:
-                    token_type_ids = token_type_ids[attention_mask_bool].unsqueeze(0)
+                token_type_ids = self._maybe_unpad(token_type_ids, attention_mask_bool, unpad_inputs)
 
             token_type_embeddings = self.token_type_embeddings(token_type_ids)
             embeddings = embeddings + token_type_embeddings
