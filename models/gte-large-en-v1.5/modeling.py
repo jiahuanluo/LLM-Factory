@@ -984,40 +984,19 @@ class NewModel(NewPreTrainedModel):
         )
 
         batch_size, seq_length = input_shape
-        if unpad_inputs and self.config.use_memory_efficient_attention:
-            attention_bias = xops.fmha.attn_bias.BlockDiagonalMask.from_seqlens(length)
-        else:
-            # We can provide a self-attention mask of dimensions [batch_size, from_seq_length, to_seq_length]
-            # ourselves in which case we just need to make it broadcastable to all heads.
-            attention_bias = self.get_extended_attention_mask(attention_mask, input_shape)
-            if self.config.use_memory_efficient_attention:
-                # Invalid shape for attention bias: torch.Size([48, 1, 1, 512]) (expected (48, 12, 512, 512))
-                attention_bias = attention_bias.expand(-1, self.config.num_attention_heads, seq_length, -1)
 
-        padding_inputs = None
-        if unpad_inputs and (output_padded or not self.config.use_memory_efficient_attention):
-            indices = torch.nonzero(attention_mask.flatten(), as_tuple=False).flatten()
-            if not self.config.use_memory_efficient_attention:
-                padding_inputs = (indices, *input_shape)
+        # 准备注意力偏置
+        attention_bias, padding_inputs = self._prepare_attention_bias(
+            attention_mask, input_shape, unpad_inputs, length
+        )
 
-        attention_scale = None
-        if self.config.logn_attention_scale:
-            logger.warning_once("TODO: logn_attention_scale")
-        #     # attention scale log_512(input_len)
-        #     attention_scale = attention_mask.sum(1).log() / torch.tensor(self.config.max_position_embeddings).log()
-        #     # inference-time logn scale need clip 1
-        #     if self.config.logn_attention_clip1:
-        #         attention_scale.clip_(1)
-        #     attention_scale = attention_scale[:, None, None, None]
-        # else:
-        #     attention_scale = None
-
+        # 编码器前向传播
         encoder_outputs = self.encoder(
             embedding_output,
             attention_bias=attention_bias,
             rope_embeds=rope_embeds,
             padding_inputs=padding_inputs,
-            attention_scale=attention_scale,
+            attention_scale=None,
             subset_indices=subset_indices,
             head_mask=head_mask,
             output_attentions=output_attentions,
@@ -1025,10 +1004,17 @@ class NewModel(NewPreTrainedModel):
             return_dict=return_dict,
         )
         sequence_output = encoder_outputs[0]
+
+        # 处理输出
+        # 获取 indices 用于 _prepare_output
+        indices = None
         if unpad_inputs and output_padded:
-            sequence_output = pad_input(
-                sequence_output.squeeze(), indices, batch_size, seq_length
-            )
+            indices = torch.nonzero(attention_mask.flatten(), as_tuple=False).flatten()
+
+        sequence_output = self._prepare_output(
+            sequence_output, unpad_inputs, output_padded,
+            indices, batch_size, seq_length
+        )
 
         pooled_output = self.pooler(sequence_output) if self.pooler is not None else None
 
