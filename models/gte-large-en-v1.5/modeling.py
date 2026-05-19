@@ -608,7 +608,6 @@ class NewSdpaAttention(NewAttention):
 
 NEW_ATTENTION_CLASSES = {
     "eager": NewAttention,
-    # "flash_attention_2": ,  # TODO
     "sdpa": NewSdpaAttention,
 }
 
@@ -982,14 +981,6 @@ class NewModel(NewPreTrainedModel):
             input_shape = inputs_embeds.size()[:-1]
         else:
             raise ValueError("You have to specify either input_ids or inputs_embeds")
-
-        # TODO: not used
-        # # Prepare head mask if needed
-        # # 1.0 in head_mask indicate we keep the head
-        # # attention_probs has shape bsz x n_heads x N x N
-        # # input head_mask has shape [num_heads] or [num_hidden_layers x num_heads]
-        # # and head_mask is converted to shape [num_hidden_layers x batch x num_heads x seq_length x seq_length]
-        # head_mask = self.get_head_mask(head_mask, self.config.num_hidden_layers)
 
         # Get embeddings, may unpad them
         (embedding_output, attention_mask, rope_embeds, length) = self.embeddings(
