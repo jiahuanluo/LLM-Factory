@@ -34,6 +34,9 @@ import os
 import random
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
+
+import yaml
 
 import datasets
 import numpy as np
@@ -53,6 +56,7 @@ from transformers import (
     default_data_collator,
     set_seed,
 )
+from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
@@ -291,18 +295,40 @@ def _load_dataset(filepath, is_csv, cache_dir, token):
     return load_dataset(fmt, data_files={"validation": filepath}, cache_dir=cache_dir, token=token)
 
 
+def read_args(parser):
+    """Parse arguments from YAML, JSON, or CLI."""
+    if len(sys.argv) > 1 and sys.argv[1].endswith((".yaml", ".yml")):
+        with open(sys.argv[1]) as f:
+            config = yaml.safe_load(f) or {}
+        # CLI overrides: --key value pairs after the YAML path
+        if len(sys.argv) > 2:
+            cli_args = sys.argv[2:]
+            i = 0
+            while i < len(cli_args):
+                if cli_args[i].startswith("--"):
+                    key = cli_args[i][2:]
+                    if i + 1 < len(cli_args) and not cli_args[i + 1].startswith("--"):
+                        config[key] = cli_args[i + 1]
+                        i += 2
+                    else:
+                        config[key] = True
+                        i += 1
+                else:
+                    i += 1
+        return parser.parse_dict(config)
+    elif len(sys.argv) > 1 and sys.argv[1].endswith(".json"):
+        return parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
+    else:
+        return parser.parse_args_into_dataclasses()
+
+
 def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
 
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
-    if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
-        # If we pass only one argument to the script and it's the path to a json file,
-        # let's parse it to get our arguments.
-        model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
-    else:
-        model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+    model_args, data_args, training_args = read_args(parser)
 
     # Setup logging
     logging.basicConfig(
@@ -317,7 +343,7 @@ def main():
 
     log_level = training_args.get_process_log_level()
     logger.setLevel(log_level)
-    datasets.utils.logging.set_verbosity(log_level)
+    datasets.utils.logging.set_verbosity(logging.WARNING)
     transformers.utils.logging.set_verbosity(log_level)
     transformers.utils.logging.enable_default_handler()
     transformers.utils.logging.enable_explicit_format()
@@ -440,11 +466,7 @@ def main():
 
     # Trying to have good defaults here, don't hesitate to tweak to your needs.
 
-    is_regression = (
-        raw_datasets["train"].features["label"].dtype in ["float32", "float64"]
-        if data_args.do_regression is None
-        else data_args.do_regression
-    )
+    is_regression = data_args.do_regression is True
 
     is_multi_label = False
     if is_regression:
@@ -467,6 +489,15 @@ def main():
                     raise error
 
     else:  # classification
+        # Cast float labels to int for classification (e.g., 0.0/1.0 -> 0/1)
+        if raw_datasets["train"].features["label"].dtype in ["float32", "float64"]:
+            logger.info("Label dtype is float, casting to int32 for classification.")
+            features = raw_datasets["train"].features.copy()
+            features.update({"label": Value("int32")})
+            for split in raw_datasets:
+                if "label" in raw_datasets[split].features:
+                    raw_datasets[split] = raw_datasets[split].cast(features)
+
         if raw_datasets["train"].features["label"].dtype == "list":  # multi-label classification
             is_multi_label = True
             logger.info("Label type is list, doing multi-label classification")
@@ -726,6 +757,11 @@ def main():
         checkpoint = None
         if training_args.resume_from_checkpoint is not None:
             checkpoint = training_args.resume_from_checkpoint
+        elif os.path.isdir(training_args.output_dir):
+            last_checkpoint = get_last_checkpoint(training_args.output_dir)
+            if last_checkpoint is not None:
+                checkpoint = last_checkpoint
+                logger.info(f"Resuming from latest checkpoint: {checkpoint}")
         train_result = trainer.train(resume_from_checkpoint=checkpoint)
         metrics = train_result.metrics
         max_train_samples = (
@@ -752,16 +788,21 @@ def main():
         # Removing the `label` columns if exists because it might contains -1 and Trainer won't like that.
         if "label" in predict_dataset.features:
             predict_dataset = predict_dataset.remove_columns("label")
-        predictions = trainer.predict(predict_dataset, metric_key_prefix="predict").predictions
+        predict_result = trainer.predict(predict_dataset, metric_key_prefix="predict")
+        raw_predictions = predict_result.predictions
         if is_regression:
-            predictions = np.squeeze(predictions)
+            predictions = np.squeeze(raw_predictions)
         elif is_multi_label:
-            # Convert logits to multi-hot encoding. We compare the logits to 0 instead of 0.5, because the sigmoid is not applied.
-            # You can also pass `preprocess_logits_for_metrics=lambda logits, labels: nn.functional.sigmoid(logits)` to the Trainer
-            # and set p > 0.5 below (less efficient in this case)
-            predictions = np.array([np.where(p > 0, 1, 0) for p in predictions])
+            predictions = np.array([np.where(p > 0, 1, 0) for p in raw_predictions])
         else:
-            predictions = np.argmax(predictions, axis=1)
+            # For binary classification, output probability of positive class (class 1)
+            # For multi-class, output argmax label
+            if raw_predictions.shape[1] == 2:
+                # Binary: softmax to get probabilities, output class 1 probability
+                probs = np.exp(raw_predictions) / np.sum(np.exp(raw_predictions), axis=1, keepdims=True)
+                predictions = probs[:, 1]
+            else:
+                predictions = np.argmax(raw_predictions, axis=1)
         output_predict_file = os.path.join(training_args.output_dir, "predict_results.txt")
         if trainer.is_world_process_zero():
             with open(output_predict_file, "w") as writer:
@@ -774,6 +815,9 @@ def main():
                         # recover from multi-hot encoding
                         item = [label_list[i] for i in range(len(item)) if item[i] == 1]
                         writer.write(f"{index}\t{item}\n")
+                    elif raw_predictions.shape[1] == 2:
+                        # Binary classification: output probability
+                        writer.write(f"{index}\t{item:.6f}\n")
                     else:
                         item = label_list[item]
                         writer.write(f"{index}\t{item}\n")

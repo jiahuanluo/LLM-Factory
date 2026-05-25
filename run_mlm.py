@@ -34,11 +34,15 @@ https://huggingface.co/models?filter=fill-mask
 # You can also adapt this script on your own masked language modeling task. Pointers for this are left as comments.
 
 import logging
+import logging
 import math
 import os
 import sys
 from dataclasses import dataclass, field
 from itertools import chain
+from pathlib import Path
+
+import yaml
 
 import datasets
 from sklearn.metrics import accuracy_score
@@ -59,6 +63,7 @@ from transformers import (
     is_torch_xla_available,
     set_seed,
 )
+from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
@@ -247,18 +252,39 @@ class DataTrainingArguments:
                     raise ValueError("`validation_file` should be a csv, a json or a txt file.")
 
 
+def read_args(parser):
+    """Parse arguments from YAML, JSON, or CLI."""
+    if len(sys.argv) > 1 and sys.argv[1].endswith((".yaml", ".yml")):
+        with open(sys.argv[1]) as f:
+            config = yaml.safe_load(f) or {}
+        if len(sys.argv) > 2:
+            cli_args = sys.argv[2:]
+            i = 0
+            while i < len(cli_args):
+                if cli_args[i].startswith("--"):
+                    key = cli_args[i][2:]
+                    if i + 1 < len(cli_args) and not cli_args[i + 1].startswith("--"):
+                        config[key] = cli_args[i + 1]
+                        i += 2
+                    else:
+                        config[key] = True
+                        i += 1
+                else:
+                    i += 1
+        return parser.parse_dict(config)
+    elif len(sys.argv) > 1 and sys.argv[1].endswith(".json"):
+        return parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
+    else:
+        return parser.parse_args_into_dataclasses()
+
+
 def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
 
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
-    if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
-        # If we pass only one argument to the script and it's the path to a json file,
-        # let's parse it to get our arguments.
-        model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
-    else:
-        model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+    model_args, data_args, training_args = read_args(parser)
 
     # Setup logging
     logging.basicConfig(
@@ -273,7 +299,7 @@ def main():
 
     log_level = training_args.get_process_log_level()
     logger.setLevel(log_level)
-    datasets.utils.logging.set_verbosity(log_level)
+    datasets.utils.logging.set_verbosity(logging.WARNING)
     transformers.utils.logging.set_verbosity(log_level)
     transformers.utils.logging.enable_default_handler()
     transformers.utils.logging.enable_explicit_format()
@@ -610,6 +636,11 @@ def main():
         checkpoint = None
         if training_args.resume_from_checkpoint is not None:
             checkpoint = training_args.resume_from_checkpoint
+        elif os.path.isdir(training_args.output_dir):
+            last_checkpoint = get_last_checkpoint(training_args.output_dir)
+            if last_checkpoint is not None:
+                checkpoint = last_checkpoint
+                logger.info(f"Resuming from latest checkpoint: {checkpoint}")
         train_result = trainer.train(resume_from_checkpoint=checkpoint)
         trainer.save_model()  # Saves the tokenizer too for easy upload
         metrics = train_result.metrics
