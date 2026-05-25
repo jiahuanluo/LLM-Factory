@@ -1,34 +1,23 @@
-# 多验证集评估示例
+# 多验证集示例
 # 用法: python run_classification.py configs/sft_cls_multi_val.yaml
 
-# 模型
 model_name_or_path: bert-base-uncased
-
-# 数据
 train_file: data/train.csv
 validation_files: data/val_oot1.csv,data/val_oot2.csv,data/val_oot3.csv
 text_column_names: sentence
 metric_name: accuracy
+do_regression: false
 
-# 训练超参
+# 训练参数
 learning_rate: 2e-5
 num_train_epochs: 3
 per_device_train_batch_size: 32
 per_device_eval_batch_size: 64
 max_seq_length: 128
-
-# 任务
-do_regression: false
-do_train: true
-do_eval: true
-
-# 评估和保存
 eval_strategy: epoch
 save_strategy: epoch
 load_best_model_at_end: true
 metric_for_best_model: eval_validation_0_accuracy
 greater_is_better: true
-
-# 日志
 output_dir: output/cls_multi_val
 report_to: tensorboard
