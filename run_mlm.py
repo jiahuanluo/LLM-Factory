@@ -40,9 +40,6 @@ import os
 import sys
 from dataclasses import dataclass, field
 from itertools import chain
-from pathlib import Path
-
-import yaml
 
 import datasets
 from sklearn.metrics import accuracy_score
@@ -69,9 +66,9 @@ from transformers.utils.versions import require_version
 
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
-check_min_version("4.57.0.dev0")
+# check_min_version("4.57.0.dev0")
 
-require_version("datasets>=2.14.0", "To fix: pip install -r examples/pytorch/language-modeling/requirements.txt")
+# require_version("datasets>=2.14.0", "To fix: pip install -r examples/pytorch/language-modeling/requirements.txt")
 
 logger = logging.getLogger(__name__)
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_MASKED_LM_MAPPING.keys())
@@ -252,36 +249,12 @@ class DataTrainingArguments:
                     raise ValueError("`validation_file` should be a csv, a json or a txt file.")
 
 
-def read_args(parser):
-    """Parse arguments from YAML, JSON, or CLI."""
-    if len(sys.argv) > 1 and sys.argv[1].endswith((".yaml", ".yml")):
-        with open(sys.argv[1]) as f:
-            config = yaml.safe_load(f) or {}
-        if len(sys.argv) > 2:
-            cli_args = sys.argv[2:]
-            i = 0
-            while i < len(cli_args):
-                if cli_args[i].startswith("--"):
-                    key = cli_args[i][2:]
-                    if i + 1 < len(cli_args) and not cli_args[i + 1].startswith("--"):
-                        config[key] = cli_args[i + 1]
-                        i += 2
-                    else:
-                        config[key] = True
-                        i += 1
-                else:
-                    i += 1
-        return parser.parse_dict(config)
-    elif len(sys.argv) > 1 and sys.argv[1].endswith(".json"):
-        return parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
-    else:
-        return parser.parse_args_into_dataclasses()
-
-
 def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
+
+    from args_parser import read_args
 
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
     model_args, data_args, training_args = read_args(parser)
