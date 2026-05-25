@@ -6,6 +6,6 @@ sentencepiece!=0.1.92
 protobuf
 scikit-learn
 scipy
-albumentations>=1.4.16
+pyyaml>=6.0
 pandas>=1.5.0
 openpyxl>=3.0.0
