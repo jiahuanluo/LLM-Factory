@@ -6,127 +6,120 @@
 # =============================================================================
 
 # -----------------------------------------------------------------------------
+# 经常调整的配置
+# -----------------------------------------------------------------------------
+model_name_or_path: bert-base-uncased       # 预训练模型路径或 HuggingFace Hub 模型 ID
+train_file: data/train.txt                  # 训练集文件（txt/csv/json）
+validation_file: data/val.txt               # 验证集文件（可选）
+learning_rate: 5e-5                         # 学习率（MLM 通常比微调大一些）
+num_train_epochs: 10                        # 训练轮次（MLM 通常需要更多轮次）
+per_device_train_batch_size: 16             # 每 GPU 训练 batch size
+per_device_eval_batch_size: 32              # 每 GPU 评估 batch size
+max_seq_length: 512                         # 最大序列长度
+output_dir: output/my_mlm                   # 输出目录（checkpoint、日志、模型）
+
+# -----------------------------------------------------------------------------
 # 模型配置
 # -----------------------------------------------------------------------------
-model_name_or_path: bert-base-uncased  # 预训练模型路径或 HuggingFace Hub 模型 ID
-                                       # 从零训练时设为 null，并指定 model_type
-# model_type: null                     # 从零训练时的模型类型（如 bert, roberta, albert）
-# config_name: null                    # 配置文件路径
-# tokenizer_name: null                 # tokenizer 路径
-# cache_dir: null                      # 模型缓存目录
-# use_fast_tokenizer: true             # 是否使用 fast tokenizer
-# model_revision: main                 # 模型版本
-# token: null                          # HuggingFace Hub 访问令牌
-# trust_remote_code: false             # 是否信任远程代码
-# config_overrides: null               # 从零训练时覆盖配置（如 "n_embd=256,n_head=8"）
-# dtype: null                          # 模型精度: null, auto, bfloat16, float16, float32
-
-# -----------------------------------------------------------------------------
-# 数据配置（方式一: Hub 数据集）
-# -----------------------------------------------------------------------------
-# dataset_name: null                   # HuggingFace 数据集名称
-# dataset_config_name: null            # 数据集配置名
-
-# -----------------------------------------------------------------------------
-# 数据配置（方式二: 本地文件）
-# -----------------------------------------------------------------------------
-train_file: data/train.txt             # 训练集文件（txt/csv/json）
-validation_file: data/val.txt          # 验证集文件（可选）
+model_type: null                            # 从零训练时指定（如 bert, roberta, albert）
+config_name: null                           # 配置文件路径
+tokenizer_name: null                        # tokenizer 路径
+cache_dir: null                             # 模型缓存目录
+use_fast_tokenizer: true                    # 是否使用 fast tokenizer
+model_revision: main                        # 模型版本
+token: null                                 # HuggingFace Hub 访问令牌
+trust_remote_code: false                    # 是否信任远程代码
+config_overrides: null                      # 从零训练时覆盖配置（如 "n_embd=256,n_head=8"）
+dtype: null                                 # 模型精度: null, auto, bfloat16, float16, float32
 
 # -----------------------------------------------------------------------------
 # 任务配置
 # -----------------------------------------------------------------------------
-do_train: true                         # 是否训练
-do_eval: true                          # 是否评估
+do_train: true                              # 是否训练
+do_eval: true                               # 是否评估
+
+# -----------------------------------------------------------------------------
+# 数据配置（与 train_file 二选一）
+# -----------------------------------------------------------------------------
+dataset_name: null                          # HuggingFace 数据集名称
+dataset_config_name: null                   # 数据集配置名
 
 # -----------------------------------------------------------------------------
 # 数据处理配置
 # -----------------------------------------------------------------------------
-line_by_line: false                    # 文本处理模式:
-                                       #   true:  逐行 tokenize（每行独立，适合已分好行的文本）
-                                       #   false: 拼接后按 max_seq_length 分块（默认，适合长文档）
-max_seq_length: 512                    # 最大序列长度
-                                       # line_by_line=true 时: 超长截断
-                                       # line_by_line=false 时: 拼接后按此长度切块
-# pad_to_max_length: false             # 是否统一填充到 max_seq_length
-# preprocessing_num_workers: null      # 数据预处理进程数
-# overwrite_cache: false               # 是否覆盖缓存
+line_by_line: false                         # true=逐行 tokenize, false=拼接后分块
+mlm_probability: 0.15                       # 掩码概率（15% = BERT 原始设置）
+pad_to_max_length: false                    # true=固定长度填充, false=动态 padding
+preprocessing_num_workers: null             # 数据预处理进程数
+overwrite_cache: false                      # 是否覆盖缓存
+validation_split_percentage: 5              # 无验证集时从训练集切分的比例（百分比）
 
 # -----------------------------------------------------------------------------
-# MLM 配置
+# 评估和保存配置
 # -----------------------------------------------------------------------------
-mlm_probability: 0.15                  # 掩码概率（默认 15%，BERT 原始设置）
-                                       # 15% 的 token 中: 80% 替换为 [MASK], 10% 随机替换, 10% 保持不变
+eval_strategy: epoch                        # 评估策略: steps, epoch
+eval_steps: null                            # 每 N 步评估一次
+save_strategy: epoch                        # 保存策略: steps, epoch
+save_steps: null                            # 每 N 步保存一次
+save_total_limit: null                      # 最多保留 checkpoint 数量
 
 # -----------------------------------------------------------------------------
-# 评估配置
+# 日志配置
 # -----------------------------------------------------------------------------
-eval_strategy: epoch                   # 评估策略: "steps" 或 "epoch"
-# eval_steps: null                     # 每 N 步评估一次
-# validation_split_percentage: 5       # 无验证集时从训练集切分的比例（百分比）
+logging_steps: 50                           # 每 N 步记录一次 loss
+logging_dir: null                           # TensorBoard 日志目录
+logging_strategy: steps                     # 日志策略: steps, epoch
+log_level: passive                          # 日志级别: debug, info, warning, error, passive
+report_to: tensorboard                      # 日志报告工具: tensorboard, wandb, none
 
 # -----------------------------------------------------------------------------
 # 优化器配置
 # -----------------------------------------------------------------------------
-learning_rate: 5e-5                    # 学习率（MLM 通常比微调大一些）
-# weight_decay: 0.0                    # 权重衰减
-# adam_beta1: 0.9                      # AdamW beta1
-# adam_beta2: 0.999                    # AdamW beta2
-# adam_epsilon: 1e-8                   # AdamW epsilon
-# max_grad_norm: 1.0                   # 梯度裁剪
+weight_decay: 0.0                           # 权重衰减
+adam_beta1: 0.9                             # AdamW beta1
+adam_beta2: 0.999                           # AdamW beta2
+adam_epsilon: 1e-8                          # AdamW epsilon
+max_grad_norm: 1.0                          # 梯度裁剪
+optim: adamw_torch                          # 优化器类型
 
 # -----------------------------------------------------------------------------
 # 学习率调度配置
 # -----------------------------------------------------------------------------
-# lr_scheduler_type: linear            # 调度器类型: linear, cosine, constant_with_warmup 等
-# warmup_ratio: 0.0                    # warmup 比例
-# warmup_steps: 0                      # warmup 步数
-
-# -----------------------------------------------------------------------------
-# 训练轮次和批次配置
-# -----------------------------------------------------------------------------
-num_train_epochs: 10                   # 训练轮次（MLM 通常需要更多轮次）
-per_device_train_batch_size: 16        # 每 GPU 训练 batch size
-per_device_eval_batch_size: 32         # 每 GPU 评估 batch size
-# gradient_accumulation_steps: 1       # 梯度累积步数
+lr_scheduler_type: linear                   # 调度器: linear, cosine, constant_with_warmup 等
+warmup_ratio: 0.0                           # warmup 比例
+warmup_steps: 0                             # warmup 步数
 
 # -----------------------------------------------------------------------------
 # 精度配置
 # -----------------------------------------------------------------------------
-# fp16: false                          # FP16 混合精度
-# bf16: false                          # BF16 混合精度（A100/H100 推荐）
+fp16: false                                 # FP16 混合精度
+bf16: false                                 # BF16 混合精度（A100/H100 推荐）
 
 # -----------------------------------------------------------------------------
-# 保存和日志配置
+# 梯度累积
 # -----------------------------------------------------------------------------
-output_dir: output/example_mlm         # 输出目录
-# save_strategy: steps                 # 保存策略
-# save_steps: 500                      # 保存间隔
-# save_total_limit: null               # 最大 checkpoint 数量
-logging_steps: 50                      # 日志间隔
-report_to: tensorboard                 # 日志报告工具
+gradient_accumulation_steps: 1              # 梯度累积步数
 
 # -----------------------------------------------------------------------------
 # Checkpoint 恢复配置
 # -----------------------------------------------------------------------------
-# resume_from_checkpoint: null         # 从指定 checkpoint 恢复
-                                       # 不指定时自动从 output_dir 最新 checkpoint 恢复
+resume_from_checkpoint: null                # 不指定时自动从 output_dir 最新 checkpoint 恢复
 
 # -----------------------------------------------------------------------------
 # 数据加载配置
 # -----------------------------------------------------------------------------
-# dataloader_num_workers: 0            # 数据加载进程数
-# dataloader_pin_memory: true          # 是否 pin memory
+dataloader_num_workers: 0                   # 数据加载进程数
+dataloader_pin_memory: true                 # 是否 pin memory
 
 # -----------------------------------------------------------------------------
 # 分布式训练配置
-# 使用方式: torchrun --nproc_per_node 8 run_mlm.py configs/example_mlm.yaml
 # -----------------------------------------------------------------------------
-# deepspeed: null                      # DeepSpeed 配置文件路径
+deepspeed: null                             # DeepSpeed 配置文件路径
+local_rank: -1                              # 本地进程 rank
 
 # -----------------------------------------------------------------------------
 # 其他配置
 # -----------------------------------------------------------------------------
-# seed: 42                             # 随机种子
-# streaming: false                     # 是否使用流式加载（大数据集时有用）
-# push_to_hub: false                   # 是否推送到 HuggingFace Hub
+seed: 42                                    # 随机种子
+streaming: false                            # 是否使用流式加载（大数据集时有用）
+push_to_hub: false                          # 是否推送到 HuggingFace Hub
