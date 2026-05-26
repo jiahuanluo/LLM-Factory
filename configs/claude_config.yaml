@@ -1,0 +1,19 @@
+# =============================================================================
+# Claude Code 一键配置
+# 用法: python setup_claude.py configs/claude_config.yaml
+# 选项: --dry-run（仅打印） --skip-plugins（跳过插件安装）
+# =============================================================================
+
+# API 配置
+api_base_url: "https://open.bigmodel.cn/api/anthropic"  # API 地址
+api_key: "your-api-key-here"                            # API Key（必填）
+
+# 模型配置
+model: "claude-sonnet-4-6"                              # 默认模型
+
+# 超时配置
+api_timeout_ms: 3000000                                 # API 超时时间（毫秒）
+
+# 插件配置（可选，离线部署用）
+plugins_enabled: true                                   # 是否安装插件
+plugins_dir: "deploy/plugins"                           # 插件源目录（相对于仓库根目录）
