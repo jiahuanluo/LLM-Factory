@@ -1,0 +1,50 @@
+{
+  "claude-plugins-official": {
+    "source": {
+      "source": "github",
+      "repo": "anthropics/claude-plugins-official"
+    },
+    "installLocation": "/home/daxigua/.claude/plugins/marketplaces/claude-plugins-official",
+    "lastUpdated": "2026-04-20T15:44:03.173Z"
+  },
+  "superpowers-marketplace": {
+    "source": {
+      "source": "github",
+      "repo": "obra/superpowers-marketplace"
+    },
+    "installLocation": "/home/daxigua/.claude/plugins/marketplaces/superpowers-marketplace",
+    "lastUpdated": "2026-04-20T15:50:06.309Z"
+  },
+  "claude-hud": {
+    "source": {
+      "source": "github",
+      "repo": "jarrodwatts/claude-hud"
+    },
+    "installLocation": "/home/daxigua/.claude/plugins/marketplaces/claude-hud",
+    "lastUpdated": "2026-04-29T03:36:46.556Z"
+  },
+  "karpathy-skills": {
+    "source": {
+      "source": "github",
+      "repo": "forrestchang/andrej-karpathy-skills"
+    },
+    "installLocation": "/home/daxigua/.claude/plugins/marketplaces/karpathy-skills",
+    "lastUpdated": "2026-05-08T07:33:53.970Z"
+  },
+  "voltagent-subagents": {
+    "source": {
+      "source": "github",
+      "repo": "VoltAgent/awesome-claude-code-subagents"
+    },
+    "installLocation": "/home/daxigua/.claude/plugins/marketplaces/voltagent-subagents",
+    "lastUpdated": "2026-05-12T12:31:42.017Z"
+  },
+  "omc": {
+    "source": {
+      "source": "git",
+      "url": "https://github.com/Yeachan-Heo/oh-my-claudecode.git"
+    },
+    "installLocation": "/home/daxigua/.claude/plugins/marketplaces/omc",
+    "lastUpdated": "2026-05-26T03:07:10.937Z"
+  }
+}

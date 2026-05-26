@@ -1,0 +1,105 @@
+{
+  "version": 2,
+  "plugins": {
+    "superpowers@claude-plugins-official": [
+      {
+        "scope": "user",
+        "installPath": "/home/daxigua/.claude/plugins/cache/claude-plugins-official/superpowers/5.0.7",
+        "version": "5.0.7",
+        "installedAt": "2026-04-20T15:50:28.490Z",
+        "lastUpdated": "2026-04-20T15:50:28.490Z",
+        "gitCommitSha": "b55764852ac78870e65c6565fb585b6cd8b3c5c9"
+      }
+    ],
+    "claude-hud@claude-hud": [
+      {
+        "scope": "user",
+        "installPath": "/home/daxigua/.claude/plugins/cache/claude-hud/claude-hud/0.1.0",
+        "version": "0.1.0",
+        "installedAt": "2026-04-29T03:36:56.964Z",
+        "lastUpdated": "2026-04-29T03:36:56.964Z",
+        "gitCommitSha": "64a80990ca39cb35cc1a23e2d6bd69183d2f88c4"
+      }
+    ],
+    "code-simplifier@claude-plugins-official": [
+      {
+        "scope": "user",
+        "installPath": "/home/daxigua/.claude/plugins/cache/claude-plugins-official/code-simplifier/1.0.0",
+        "version": "1.0.0",
+        "installedAt": "2026-05-08T07:33:31.352Z",
+        "lastUpdated": "2026-05-08T07:33:31.352Z",
+        "gitCommitSha": "bb7730114d873b91acd477e696066f217f882391"
+      }
+    ],
+    "ralph-loop@claude-plugins-official": [
+      {
+        "scope": "user",
+        "installPath": "/home/daxigua/.claude/plugins/cache/claude-plugins-official/ralph-loop/1.0.0",
+        "version": "1.0.0",
+        "installedAt": "2026-05-08T07:33:34.475Z",
+        "lastUpdated": "2026-05-08T07:33:34.475Z",
+        "gitCommitSha": "bb7730114d873b91acd477e696066f217f882391"
+      }
+    ],
+    "code-review@claude-plugins-official": [
+      {
+        "scope": "user",
+        "installPath": "/home/daxigua/.claude/plugins/cache/claude-plugins-official/code-review/bb7730114d87",
+        "version": "bb7730114d87",
+        "installedAt": "2026-05-08T07:33:41.084Z",
+        "lastUpdated": "2026-05-08T07:33:41.084Z",
+        "gitCommitSha": "bb7730114d873b91acd477e696066f217f882391"
+      }
+    ],
+    "andrej-karpathy-skills@karpathy-skills": [
+      {
+        "scope": "user",
+        "installPath": "/home/daxigua/.claude/plugins/cache/karpathy-skills/andrej-karpathy-skills/1.0.0",
+        "version": "1.0.0",
+        "installedAt": "2026-05-08T07:33:58.679Z",
+        "lastUpdated": "2026-05-08T07:33:58.679Z",
+        "gitCommitSha": "2c606141936f1eeef17fa3043a72095b4765b9c2"
+      }
+    ],
+    "voltagent-biz@voltagent-subagents": [
+      {
+        "scope": "user",
+        "installPath": "/home/daxigua/.claude/plugins/cache/voltagent-subagents/voltagent-biz/1.0.2",
+        "version": "1.0.2",
+        "installedAt": "2026-05-12T12:32:36.531Z",
+        "lastUpdated": "2026-05-12T12:32:36.531Z",
+        "gitCommitSha": "6f804f0cfab22fb62668855aa3d62ee3a1453077"
+      }
+    ],
+    "voltagent-research@voltagent-subagents": [
+      {
+        "scope": "user",
+        "installPath": "/home/daxigua/.claude/plugins/cache/voltagent-subagents/voltagent-research/1.0.3",
+        "version": "1.0.3",
+        "installedAt": "2026-05-14T04:02:39.986Z",
+        "lastUpdated": "2026-05-14T04:02:39.986Z",
+        "gitCommitSha": "6f804f0cfab22fb62668855aa3d62ee3a1453077"
+      }
+    ],
+    "frontend-design@claude-plugins-official": [
+      {
+        "scope": "user",
+        "installPath": "/home/daxigua/.claude/plugins/cache/claude-plugins-official/frontend-design/bb7730114d87",
+        "version": "bb7730114d87",
+        "installedAt": "2026-05-21T14:56:53.347Z",
+        "lastUpdated": "2026-05-21T14:56:53.347Z",
+        "gitCommitSha": "bb7730114d873b91acd477e696066f217f882391"
+      }
+    ],
+    "oh-my-claudecode@omc": [
+      {
+        "scope": "user",
+        "installPath": "/home/daxigua/.claude/plugins/cache/omc/oh-my-claudecode/4.14.3",
+        "version": "4.14.3",
+        "installedAt": "2026-05-26T03:07:24.210Z",
+        "lastUpdated": "2026-05-26T03:07:24.210Z",
+        "gitCommitSha": "3df2c19963f2c50927b06e94e899c19993624c69"
+      }
+    ]
+  }
+}
