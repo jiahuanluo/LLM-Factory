@@ -49,6 +49,7 @@ python run_classification.py --model_name_or_path <model> --train_file train.csv
 
 - 任务类型自动推断：label 列为 float → 回归（MSE），为 list → 多标签（F1 micro），其他 → 单标签（默认 accuracy，支持 auc/ks）
 - 多验证集：`--validation_files` 接受逗号分隔路径，单个文件加载为 `"validation"` split，多个加载为 `"validation_0"`, `"validation_1"` ... Trainer 对每个 key 分别评估
+- 多测试集：`--test_file` 同样支持逗号分隔，单个输出 `predict_results.txt`，多个输出 `predict_results_test_0.txt`, `predict_results_test_1.txt` ...
 - label 发现：从 train + 所有 validation/test split 合并 label list，防止 val 出现 train 未见的标签
 
 ### run_mlm.py

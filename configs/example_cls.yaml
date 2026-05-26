@@ -1,108 +1,114 @@
 # =============================================================================
 # 文本分类训练配置（完整示例）
-# 用法: python run_classification.py configs/example_cls.yaml
-# 多卡: torchrun --nproc_per_node 8 run_classification.py configs/example_cls.yaml
-# 覆盖: python run_classification.py configs/example_cls.yaml --learning_rate 1e-4
+#
+# 用法:
+#   python run_classification.py configs/example_cls.yaml
+#   python run_classification.py configs/example_cls.yaml --learning_rate 1e-4  # CLI 覆盖
+#   torchrun --nproc_per_node 8 run_classification.py configs/example_cls.yaml  # 多卡
+#
+# 必填参数: model_name_or_path, train_file, validation_files, text_column_names, output_dir
 # =============================================================================
 
 # -----------------------------------------------------------------------------
-# 必填配置
+# [必填] 模型路径 —— 预训练模型的本地路径或 HuggingFace 模型 ID
 # -----------------------------------------------------------------------------
-model_name_or_path: bert-base-uncased       # 预训练模型路径
-train_file: data/train.csv                  # 训练集文件（CSV 或 JSON）
-validation_files: data/val.csv              # 验证集文件，多个用逗号分隔如 val1.csv,val2.csv
-text_column_names: sentence                 # 文本列名，多列用逗号分隔如 title,content
-output_dir: output/my_model                 # 输出目录（checkpoint、日志、模型）
+model_name_or_path: bert-base-uncased
 
 # -----------------------------------------------------------------------------
-# 任务配置
+# [必填] 数据文件 —— 支持 CSV 和 JSON 格式
+# -----------------------------------------------------------------------------
+train_file: data/train.csv                  # 训练集文件路径
+validation_files: data/val.csv              # 验证集文件路径，多个用逗号分隔: val1.csv,val2.csv
+text_column_names: sentence                 # 文本列名，多列用逗号分隔: title,content
+
+# -----------------------------------------------------------------------------
+# [必填] 输出目录 —— checkpoint、日志、最终模型都会保存到这里
+# -----------------------------------------------------------------------------
+output_dir: output/my_model
+
+# -----------------------------------------------------------------------------
+# [常用] 训练超参 —— 这些参数最常调整
+# -----------------------------------------------------------------------------
+learning_rate: 2e-5                         # 学习率，BERT 微调推荐 2e-5 ~ 5e-5
+num_train_epochs: 3                         # 训练轮次
+per_device_train_batch_size: 32             # 每 GPU 的训练 batch size
+per_device_eval_batch_size: 64              # 每 GPU 的评估 batch size
+max_seq_length: 128                         # 最大序列长度（token 数），超长截断，短的补齐
+metric_name: auc                            # 评估指标: accuracy, auc, ks, f1, mse（auc 时自动同时计算 ks）
+
+# -----------------------------------------------------------------------------
+# [常用] 任务类型
 # -----------------------------------------------------------------------------
 do_train: true                              # 是否训练
-do_eval: true                               # 是否评估
-do_predict: false                           # 是否预测（输出到 output_dir/predict_results.txt）
-do_regression: false                        # 是否为回归任务（false=分类, true=回归）
+do_eval: true                               # 是否评估（每个 epoch 结束后在验证集上评估）
+do_predict: false                           # 是否预测（对 test_file 输出预测结果）
+do_regression: false                        # false=分类任务, true=回归任务
 
 # -----------------------------------------------------------------------------
-# 训练超参（经常调整）
+# [可选] 标签列配置
 # -----------------------------------------------------------------------------
-learning_rate: 2e-5                         # 学习率
-num_train_epochs: 3                         # 训练轮次
-per_device_train_batch_size: 32             # 每 GPU 训练 batch size
-per_device_eval_batch_size: 64              # 每 GPU 评估 batch size
-max_seq_length: 128                         # 最大序列长度，超长截断，短的补齐
-metric_name: auc                            # 评估指标: accuracy, auc, ks, f1, mse
+label_column_name: null                     # 标签列名（默认使用 "label" 列）
 
 # -----------------------------------------------------------------------------
-# 模型配置（可选）
+# [可选] 数据列配置
 # -----------------------------------------------------------------------------
-cache_dir: null                             # 模型缓存目录（默认 ~/.cache/huggingface/hub）
-use_fast_tokenizer: true                    # 是否使用 fast tokenizer
-model_revision: main                        # 模型版本（分支名、tag 或 commit id）
-token: null                                 # HuggingFace Hub 访问令牌（私有模型时需要）
-trust_remote_code: false                    # 是否信任远程代码
-ignore_mismatched_sizes: false              # 加载模型时忽略维度不匹配（如修改了分类头）
+test_file: null                             # 测试集文件（do_predict=true 时使用），多个用逗号分隔: test1.csv,test2.csv
+text_column_delimiter: " "                  # 多文本列拼接时的分隔符（默认空格）
 
 # -----------------------------------------------------------------------------
-# 数据列配置（可选）
-# -----------------------------------------------------------------------------
-test_file: null                             # 测试集文件（do_predict 时使用）
-text_column_delimiter: " "                  # 多文本列拼接时的分隔符
-label_column_name: null                     # 标签列名（默认 "label"）
-
-# -----------------------------------------------------------------------------
-# 数据清理配置（可选）
+# [可选] 数据清理
 # -----------------------------------------------------------------------------
 remove_splits: null                         # 要移除的 split（逗号分隔）
 remove_columns: null                        # 要移除的列（逗号分隔）
 
 # -----------------------------------------------------------------------------
-# 数据处理配置（可选）
+# [可选] 数据处理
 # -----------------------------------------------------------------------------
-pad_to_max_length: true                     # true=固定长度填充, false=动态 padding 省内存
+pad_to_max_length: true                     # true=固定长度填充（推荐）, false=动态 padding（省内存）
 preprocessing_num_workers: null             # 数据预处理进程数（默认单进程）
 overwrite_cache: false                      # 是否覆盖缓存的预处理数据
 shuffle_train_dataset: false                # 是否打乱训练集
 shuffle_seed: 42                            # 打乱种子
 
 # -----------------------------------------------------------------------------
-# 数据采样配置（调试用，可选）
+# [可选] 数据采样（调试用，快速验证流程）
 # -----------------------------------------------------------------------------
 max_train_samples: null                     # 最大训练样本数（null=使用全部）
 max_eval_samples: null                      # 最大验证样本数
 max_predict_samples: null                   # 最大测试样本数
 
 # -----------------------------------------------------------------------------
-# 优化器配置（可选）
+# [可选] 优化器
 # -----------------------------------------------------------------------------
+optim: adamw_torch                          # 优化器类型
 weight_decay: 0.0                           # 权重衰减（L2 正则化）
 adam_beta1: 0.9                             # AdamW beta1
 adam_beta2: 0.999                           # AdamW beta2
 adam_epsilon: 1e-8                          # AdamW epsilon
 max_grad_norm: 1.0                          # 梯度裁剪阈值
-optim: adamw_torch                          # 优化器类型
 
 # -----------------------------------------------------------------------------
-# 学习率调度配置（可选）
+# [可选] 学习率调度
 # -----------------------------------------------------------------------------
 lr_scheduler_type: linear                   # 调度器: linear, cosine, cosine_with_restarts, polynomial, constant, constant_with_warmup
-warmup_ratio: 0.0                           # warmup 步数占总步数的比例
+warmup_ratio: 0.0                           # warmup 步数占总步数的比例（如 0.1 表示前 10% 步做 warmup）
 warmup_steps: 0                             # warmup 步数（优先于 warmup_ratio）
 
 # -----------------------------------------------------------------------------
-# 精度配置（可选）
+# [可选] 混合精度训练
 # -----------------------------------------------------------------------------
 fp16: false                                 # FP16 混合精度（需要 GPU 支持）
 bf16: false                                 # BF16 混合精度（A100/H100 推荐）
 
 # -----------------------------------------------------------------------------
-# 梯度累积（可选）
+# [可选] 梯度累积（显存不够时增大此值）
 # -----------------------------------------------------------------------------
 gradient_accumulation_steps: 1              # 梯度累积步数（等效 batch = batch_size * n_gpu * 此值）
 
 # -----------------------------------------------------------------------------
-# 评估和保存配置（可选）
+# [可选] 评估和保存策略
 # -----------------------------------------------------------------------------
-eval_strategy: epoch                        # 评估策略: steps, epoch
+eval_strategy: epoch                        # 评估策略: steps（每 N 步）, epoch（每个 epoch）
 eval_steps: null                            # 每 N 步评估一次（eval_strategy=steps 时生效）
 save_strategy: epoch                        # 保存策略: steps, epoch
 save_steps: null                            # 每 N 步保存一次（save_strategy=steps 时生效）
@@ -112,7 +118,7 @@ metric_for_best_model: null                 # 判断最优模型的指标（如 
 greater_is_better: true                     # 指标越大越好（accuracy/auc=true, loss/mse=false）
 
 # -----------------------------------------------------------------------------
-# 日志配置（可选）
+# [可选] 日志配置
 # -----------------------------------------------------------------------------
 logging_steps: 50                           # 每 N 步记录一次 loss
 logging_dir: null                           # TensorBoard 日志目录（默认 output_dir/runs）
@@ -121,26 +127,32 @@ log_level: passive                          # 日志级别: debug, info, warning
 report_to: tensorboard                      # 日志报告工具: tensorboard, wandb, none
 
 # -----------------------------------------------------------------------------
-# Checkpoint 恢复配置（可选）
+# [可选] Checkpoint 恢复
 # -----------------------------------------------------------------------------
-resume_from_checkpoint: null                # 从指定 checkpoint 恢复（不指定时自动从最新恢复）
+resume_from_checkpoint: null                # 从指定 checkpoint 恢复（不指定时自动从 output_dir 最新 checkpoint 恢复）
 
 # -----------------------------------------------------------------------------
-# 数据加载配置（可选）
+# [可选] 数据加载
 # -----------------------------------------------------------------------------
 dataloader_num_workers: 0                   # 数据加载进程数
 dataloader_pin_memory: true                 # 是否 pin memory（加速 GPU 数据传输）
 dataloader_prefetch_factor: null            # 预取因子
 
 # -----------------------------------------------------------------------------
-# 分布式训练配置（可选，通常 torchrun 自动处理）
+# [可选] 分布式训练（通常 torchrun 自动处理）
 # -----------------------------------------------------------------------------
 deepspeed: null                             # DeepSpeed 配置文件路径（如 configs/ds_z2.json）
 local_rank: -1                              # 本地进程 rank（torchrun 自动设置）
 
 # -----------------------------------------------------------------------------
-# 其他配置（可选）
+# [可选] 其他
 # -----------------------------------------------------------------------------
-seed: 42                                    # 随机种子
-label_smoothing_factor: 0.0                 # 标签平滑系数
+seed: 42                                    # 随机种子（保证可复现性）
+label_smoothing_factor: 0.0                 # 标签平滑系数（0.0=不使用）
 torch_compile: false                        # 是否使用 torch.compile（PyTorch 2.0+）
+cache_dir: null                             # 模型缓存目录（默认 ~/.cache/huggingface/hub）
+use_fast_tokenizer: true                    # 是否使用 fast tokenizer（推荐 true）
+model_revision: main                        # 模型版本（分支名、tag 或 commit id）
+token: null                                 # HuggingFace Hub 访问令牌（私有模型时需要）
+trust_remote_code: false                    # 是否信任远程代码（谨慎使用）
+ignore_mismatched_sizes: false              # 加载模型时忽略维度不匹配（如修改了分类头）

@@ -201,7 +201,7 @@ class DataTrainingArguments:
     validation_files: str | None = field(
         default=None, metadata={"help": "Comma-separated paths to csv or json validation files. Supports single or multiple files."}
     )
-    test_file: str | None = field(default=None, metadata={"help": "A csv or a json file containing the test data."})
+    test_file: str | None = field(default=None, metadata={"help": "Comma-separated paths to csv or json test files for prediction. Supports single or multiple files."})
 
     def __post_init__(self):
         if self.dataset_name is None:
@@ -353,16 +353,20 @@ def main():
         # CSV/JSON training and evaluation files are needed.
         data_files = {"train": data_args.train_file}
 
-        # Get the test dataset: you can provide your own CSV/JSON test file
+        # Get the test dataset: you can provide your own CSV/JSON test file(s)
         if training_args.do_predict:
             if data_args.test_file is not None:
+                test_files_list = [f.strip() for f in data_args.test_file.split(",") if f.strip()]
                 train_extension = data_args.train_file.split(".")[-1]
-                test_extension = data_args.test_file.split(".")[-1]
-                if test_extension != train_extension:
-                    raise ValueError(
-                        "`test_file` should have the same extension (csv or json) as `train_file`."
-                    )
-                data_files["test"] = data_args.test_file
+                for tf in test_files_list:
+                    test_extension = tf.split(".")[-1]
+                    if test_extension != train_extension:
+                        raise ValueError(
+                            f"`test_file` entry '{tf}' should have the same extension (csv or json) as `train_file`."
+                        )
+                if len(test_files_list) == 1:
+                    data_files["test"] = test_files_list[0]
+                # Multiple test files are loaded separately after the main dataset
             else:
                 raise ValueError("Need either a dataset name or a test file for `do_predict`.")
 
@@ -402,6 +406,16 @@ def main():
                 val_datasets = _load_dataset(val_file, is_csv, model_args.cache_dir, model_args.token)
                 raw_datasets[f"validation_{i}"] = val_datasets["validation"]
                 logger.info(f"Loaded validation file '{val_file}' as split 'validation_{i}'")
+
+        # Load multiple test files into separate splits (if more than one)
+        if training_args.do_predict and data_args.test_file is not None:
+            test_files_list = [f.strip() for f in data_args.test_file.split(",") if f.strip()]
+            if len(test_files_list) > 1:
+                is_csv = data_args.train_file.endswith(".csv")
+                for i, tf in enumerate(test_files_list):
+                    test_ds = _load_dataset(tf, is_csv, model_args.cache_dir, model_args.token)
+                    raw_datasets[f"test_{i}"] = test_ds["validation"]
+                    logger.info(f"Loaded test file '{tf}' as split 'test_{i}'")
 
     # See more about loading any type of standard or custom dataset at
     # https://huggingface.co/docs/datasets/loading_datasets.
@@ -593,7 +607,18 @@ def main():
             if is_multi_label:
                 result["label"] = [multi_labels_to_ids(l) for l in examples["label"]]
             else:
-                result["label"] = [(label_to_id[str(l)] if l != -1 else -1) for l in examples["label"]]
+                mapped_labels = []
+                for l in examples["label"]:
+                    key = str(l)
+                    if key in label_to_id:
+                        mapped_labels.append(label_to_id[key])
+                    elif l == -1:
+                        mapped_labels.append(-1)
+                    else:
+                        # For prediction with mismatched labels, use 0 as placeholder
+                        # (labels will be removed before prediction anyway)
+                        mapped_labels.append(0)
+                result["label"] = mapped_labels
         return result
 
     # Running the preprocessing pipeline on all the datasets
@@ -646,13 +671,17 @@ def main():
             eval_dataset = eval_dict
 
     if training_args.do_predict or data_args.test_file is not None:
-        if "test" not in raw_datasets:
+        # Collect all test splits (single "test" or multiple "test_0", "test_1", ...)
+        predict_datasets = {}
+        for key in raw_datasets:
+            if key == "test" or key.startswith("test_"):
+                ds = raw_datasets[key]
+                if data_args.max_predict_samples is not None:
+                    max_predict_samples = min(len(ds), data_args.max_predict_samples)
+                    ds = ds.select(range(max_predict_samples))
+                predict_datasets[key] = ds
+        if not predict_datasets:
             raise ValueError("--do_predict requires a test dataset")
-        predict_dataset = raw_datasets["test"]
-        # remove label column if it exists
-        if data_args.max_predict_samples is not None:
-            max_predict_samples = min(len(predict_dataset), data_args.max_predict_samples)
-            predict_dataset = predict_dataset.select(range(max_predict_samples))
 
     # Log a few random samples from the training set:
     if training_args.do_train:
@@ -676,7 +705,23 @@ def main():
             return {"mse": mean_squared_error(p.label_ids, preds)}
         elif is_multi_label:
             preds = np.array([np.where(p > 0, 1, 0) for p in preds])
-            return {"f1": f1_score(p.label_ids, preds, average="micro")}
+            result = {"f1": f1_score(p.label_ids, preds, average="micro")}
+            # Compute per-label AUC and KS
+            if metric_name in ("auc", "ks"):
+                n_labels = p.label_ids.shape[1]
+                for i in range(n_labels):
+                    label_name = label_list[i] if label_list else str(i)
+                    try:
+                        auc = roc_auc_score(p.label_ids[:, i], preds[:, i])
+                        result[f"auc_{label_name}"] = auc if not np.isnan(auc) else 0.0
+                    except ValueError:
+                        result[f"auc_{label_name}"] = 0.0
+                    try:
+                        fpr, tpr, _ = roc_curve(p.label_ids[:, i], preds[:, i])
+                        result[f"ks_{label_name}"] = float(np.max(tpr - fpr))
+                    except ValueError:
+                        result[f"ks_{label_name}"] = 0.0
+            return result
         else:
             probs = preds
             preds = np.argmax(preds, axis=1)
@@ -693,6 +738,10 @@ def main():
                 except ValueError as e:
                     logger.warning(f"Could not compute AUC: {e}")
                     result["auc"] = 0.0
+                # Also compute KS for binary classification
+                if probs.shape[1] == 2:
+                    fpr, tpr, _ = roc_curve(p.label_ids, probs[:, 1])
+                    result["ks"] = float(np.max(tpr - fpr))
             elif metric_name == "ks":
                 # KS = max(TPR - FPR) from ROC curve
                 if probs.shape[1] == 2:
@@ -757,43 +806,48 @@ def main():
 
     if training_args.do_predict:
         logger.info("*** Predict ***")
-        # Removing the `label` columns if exists because it might contains -1 and Trainer won't like that.
-        if "label" in predict_dataset.features:
-            predict_dataset = predict_dataset.remove_columns("label")
-        predict_result = trainer.predict(predict_dataset, metric_key_prefix="predict")
-        raw_predictions = predict_result.predictions
-        if is_regression:
-            predictions = np.squeeze(raw_predictions)
-        elif is_multi_label:
-            predictions = np.array([np.where(p > 0, 1, 0) for p in raw_predictions])
-        else:
-            # For binary classification, output probability of positive class (class 1)
-            # For multi-class, output argmax label
-            if raw_predictions.shape[1] == 2:
-                # Binary: softmax to get probabilities, output class 1 probability
-                probs = np.exp(raw_predictions) / np.sum(np.exp(raw_predictions), axis=1, keepdims=True)
-                predictions = probs[:, 1]
+        for split_name, predict_dataset in predict_datasets.items():
+            # Removing the `label` columns if exists because it might contains -1 and Trainer won't like that.
+            if "label" in predict_dataset.features:
+                predict_dataset = predict_dataset.remove_columns("label")
+            predict_result = trainer.predict(predict_dataset, metric_key_prefix="predict")
+            raw_predictions = predict_result.predictions
+            if is_regression:
+                predictions = np.squeeze(raw_predictions)
+            elif is_multi_label:
+                predictions = np.array([np.where(p > 0, 1, 0) for p in raw_predictions])
             else:
-                predictions = np.argmax(raw_predictions, axis=1)
-        output_predict_file = os.path.join(training_args.output_dir, "predict_results.txt")
-        if trainer.is_world_process_zero():
-            with open(output_predict_file, "w") as writer:
-                logger.info("***** Predict results *****")
-                writer.write("index\tprediction\n")
-                for index, item in enumerate(predictions):
-                    if is_regression:
-                        writer.write(f"{index}\t{item:3.3f}\n")
-                    elif is_multi_label:
-                        # recover from multi-hot encoding
-                        item = [label_list[i] for i in range(len(item)) if item[i] == 1]
-                        writer.write(f"{index}\t{item}\n")
-                    elif raw_predictions.shape[1] == 2:
-                        # Binary classification: output probability
-                        writer.write(f"{index}\t{item:.6f}\n")
-                    else:
-                        item = label_list[item]
-                        writer.write(f"{index}\t{item}\n")
-        logger.info(f"Predict results saved at {output_predict_file}")
+                # For binary classification, output probability of positive class (class 1)
+                # For multi-class, output argmax label
+                if raw_predictions.shape[1] == 2:
+                    # Binary: softmax to get probabilities, output class 1 probability
+                    probs = np.exp(raw_predictions) / np.sum(np.exp(raw_predictions), axis=1, keepdims=True)
+                    predictions = probs[:, 1]
+                else:
+                    predictions = np.argmax(raw_predictions, axis=1)
+            # Output filename: single test -> predict_results.txt, multiple -> predict_results_N.txt
+            if len(predict_datasets) == 1:
+                output_predict_file = os.path.join(training_args.output_dir, "predict_results.txt")
+            else:
+                output_predict_file = os.path.join(training_args.output_dir, f"predict_results_{split_name}.txt")
+            if trainer.is_world_process_zero():
+                with open(output_predict_file, "w") as writer:
+                    logger.info(f"***** Predict results for {split_name} *****")
+                    writer.write("index\tprediction\n")
+                    for index, item in enumerate(predictions):
+                        if is_regression:
+                            writer.write(f"{index}\t{item:3.3f}\n")
+                        elif is_multi_label:
+                            # recover from multi-hot encoding
+                            item = [label_list[i] for i in range(len(item)) if item[i] == 1]
+                            writer.write(f"{index}\t{item}\n")
+                        elif raw_predictions.shape[1] == 2:
+                            # Binary classification: output probability
+                            writer.write(f"{index}\t{item:.6f}\n")
+                        else:
+                            item = label_list[item]
+                            writer.write(f"{index}\t{item}\n")
+            logger.info(f"Predict results saved at {output_predict_file}")
     kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "text-classification"}
 
     if training_args.push_to_hub:

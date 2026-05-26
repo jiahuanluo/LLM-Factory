@@ -34,7 +34,6 @@ https://huggingface.co/models?filter=fill-mask
 # You can also adapt this script on your own masked language modeling task. Pointers for this are left as comments.
 
 import logging
-import logging
 import math
 import os
 import sys

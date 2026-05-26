@@ -1,25 +1,26 @@
 # 多验证集评估示例
 # 用法: python run_classification.py configs/sft_cls_multi_val.yaml
 
-# 经常调整
+# 必填
 model_name_or_path: bert-base-uncased
 train_file: data/train.csv
 validation_files: data/val_oot1.csv,data/val_oot2.csv,data/val_oot3.csv
 text_column_names: sentence
-metric_name: accuracy
+output_dir: output/cls_multi_val
+
+# 常用
 learning_rate: 2e-5
 num_train_epochs: 3
 per_device_train_batch_size: 32
 per_device_eval_batch_size: 64
 max_seq_length: 128
-output_dir: output/cls_multi_val
+metric_name: accuracy
 
 # 任务
-do_regression: false
 do_train: true
 do_eval: true
 
-# 评估和保存
+# 评估和保存（多验证集时，metric_for_best_model 格式为 eval_validation_0_accuracy）
 eval_strategy: epoch
 save_strategy: epoch
 load_best_model_at_end: true

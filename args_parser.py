@@ -15,11 +15,16 @@ def _expand_paths(config):
 
 
 def _parse_numeric(config):
-    """Convert YAML strings that look like scientific notation (e.g., 2e-5) to float."""
+    """Convert YAML strings that look like numbers to int or float."""
     for key, value in config.items():
         if isinstance(value, str):
             try:
-                config[key] = float(value)
+                float_val = float(value)
+                # Convert to int if it's a whole number (e.g., "16" -> 16, not 16.0)
+                if float_val == int(float_val) and 'e' not in value.lower() and '.' not in value:
+                    config[key] = int(float_val)
+                else:
+                    config[key] = float_val
             except ValueError:
                 pass
     return config
@@ -30,8 +35,6 @@ def read_args(parser):
     if len(sys.argv) > 1 and sys.argv[1].endswith((".yaml", ".yml")):
         with open(sys.argv[1]) as f:
             config = yaml.safe_load(f) or {}
-        config = _expand_paths(config)
-        config = _parse_numeric(config)
         # CLI overrides: --key value pairs after the YAML path
         if len(sys.argv) > 2:
             cli_args = sys.argv[2:]
@@ -47,6 +50,8 @@ def read_args(parser):
                         i += 1
                 else:
                     i += 1
+        config = _expand_paths(config)
+        config = _parse_numeric(config)
         return parser.parse_dict(config)
     elif len(sys.argv) > 1 and sys.argv[1].endswith(".json"):
         return parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
