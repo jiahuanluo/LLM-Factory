@@ -571,7 +571,11 @@ def main():
             )
 
     if training_args.do_train and training_args.local_rank in [-1, 0]:
-        _check_text_col = data_args.text_column_names.split(",")[0] if data_args.text_column_names else "sentence"
+        if data_args.text_column_names is not None:
+            _check_text_col = data_args.text_column_names.split(",")[0]
+        else:
+            _features = list(raw_datasets["train"].features)
+            _check_text_col = "sentence" if "sentence" in _features else _features[0]
         check_unk_ratio(tokenizer, raw_datasets["train"], _check_text_col)
 
     model = AutoModelForSequenceClassification.from_pretrained(
