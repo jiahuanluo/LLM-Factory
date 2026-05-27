@@ -1,9 +1,27 @@
 """Shared argument parsing logic for YAML, JSON, and CLI arguments."""
 
 import os
+import re
 import sys
 
 import yaml
+
+_NUM_RE = re.compile(r'^-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$')
+
+
+def _coerce_numeric(config):
+    """Convert CLI string values that look like numbers to int/float."""
+    for key, value in config.items():
+        if isinstance(value, str) and _NUM_RE.match(value):
+            try:
+                float_val = float(value)
+                if '.' not in value and 'e' not in value.lower():
+                    config[key] = int(float_val)
+                else:
+                    config[key] = float_val
+            except ValueError:
+                pass
+    return config
 
 
 def _expand_paths(config):
@@ -35,6 +53,7 @@ def read_args(parser):
                 else:
                     i += 1
         config = _expand_paths(config)
+        config = _coerce_numeric(config)
         return parser.parse_dict(config)
     elif len(sys.argv) > 1 and sys.argv[1].endswith(".json"):
         return parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
