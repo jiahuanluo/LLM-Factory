@@ -9,7 +9,7 @@ import yaml
 def _expand_paths(config):
     """Expand ~ and environment variables in string values that look like paths."""
     for key, value in config.items():
-        if isinstance(value, str) and ("~" in value or value.startswith("./") or value.startswith("../")):
+        if isinstance(value, str) and ("~" in value or "$" in value or value.startswith("./") or value.startswith("../")):
             config[key] = os.path.expanduser(os.path.expandvars(value))
     return config
 
