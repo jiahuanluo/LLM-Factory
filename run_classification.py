@@ -707,7 +707,7 @@ def main():
             # Multiple validations: use dict
             eval_dataset = eval_dict
 
-    if training_args.do_predict or data_args.test_file is not None:
+    if training_args.do_predict:
         # Collect all test splits (single "test" or multiple "test_0", "test_1", ...)
         predict_datasets = {}
         for key in raw_datasets:
