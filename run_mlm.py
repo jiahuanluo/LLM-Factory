@@ -424,13 +424,41 @@ def main():
     if len(tokenizer) > embedding_size:
         model.resize_token_embeddings(len(tokenizer))
 
-    # Preprocessing the datasets.
-    # First we tokenize all the texts.
+    # Check UNK token ratio on a random sample before training
+    def check_unk_ratio(tokenizer, dataset, text_column, num_samples=100, threshold=0.1):
+        import random
+        unk_id = tokenizer.unk_token_id
+        if unk_id is None:
+            return
+        n = min(num_samples, len(dataset))
+        indices = random.sample(range(len(dataset)), n)
+        samples = [dataset[i][text_column] for i in indices]
+        samples = [s for s in samples if s and not s.isspace()]
+        if not samples:
+            return
+        encodings = tokenizer(samples, truncation=True, max_length=512, return_attention_mask=False)
+        total_tokens = 0
+        unk_tokens = 0
+        for ids in encodings["input_ids"]:
+            total_tokens += len(ids)
+            unk_tokens += ids.count(unk_id)
+        ratio = unk_tokens / total_tokens if total_tokens > 0 else 0
+        logger.info(f"UNK token 检查: 采样 {len(samples)} 条, 总 token {total_tokens}, UNK {unk_tokens}, 占比 {ratio:.2%}")
+        if ratio > threshold:
+            raise ValueError(
+                f"UNK token 占比 {ratio:.2%} 超过阈值 {threshold:.0%}，"
+                f"请检查 tokenizer 是否与训练数据匹配（语言、词表等）"
+            )
+
     if training_args.do_train:
         column_names = list(raw_datasets["train"].features)
     else:
         column_names = list(raw_datasets["validation"].features)
     text_column_name = "text" if "text" in column_names else column_names[0]
+
+    if training_args.local_rank in [-1, 0]:
+        check_split = "train" if training_args.do_train else "validation"
+        check_unk_ratio(tokenizer, raw_datasets[check_split], text_column_name)
 
     if data_args.max_seq_length is None:
         max_seq_length = tokenizer.model_max_length
