@@ -177,7 +177,7 @@ class DataTrainingArguments:
         default=False, metadata={"help": "Overwrite the cached training and evaluation sets"}
     )
     validation_split_percentage: int | None = field(
-        default=5,
+        default=0,
         metadata={
             "help": "The percentage of the train set used as validation set in case there's no validation split"
         },
@@ -307,11 +307,24 @@ def main():
             trust_remote_code=model_args.trust_remote_code,
         )
         if "validation" not in raw_datasets:
-            split = raw_datasets["train"].train_test_split(
-                test_size=data_args.validation_split_percentage / 100, seed=42
+            raw_datasets["validation"] = load_dataset(
+                data_args.dataset_name,
+                data_args.dataset_config_name,
+                split=f"train[:{data_args.validation_split_percentage}%]",
+                cache_dir=model_args.cache_dir,
+                token=model_args.token,
+                streaming=data_args.streaming,
+                trust_remote_code=model_args.trust_remote_code,
             )
-            raw_datasets["train"] = split["train"]
-            raw_datasets["validation"] = split["test"]
+            raw_datasets["train"] = load_dataset(
+                data_args.dataset_name,
+                data_args.dataset_config_name,
+                split=f"train[{data_args.validation_split_percentage}%:]",
+                cache_dir=model_args.cache_dir,
+                token=model_args.token,
+                streaming=data_args.streaming,
+                trust_remote_code=model_args.trust_remote_code,
+            )
     else:
         data_files = {}
         if data_args.train_file is not None:
@@ -330,9 +343,10 @@ def main():
         )
 
         # If no validation data is there, validation_split_percentage will be used to divide the dataset.
-        if "validation" not in raw_datasets:
+        if "validation" not in raw_datasets and data_args.validation_split_percentage > 0:
             split = raw_datasets["train"].train_test_split(
-                test_size=data_args.validation_split_percentage / 100, seed=42
+                test_size=data_args.validation_split_percentage / 100,
+                seed=training_args.seed,
             )
             raw_datasets["train"] = split["train"]
             raw_datasets["validation"] = split["test"]
