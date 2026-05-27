@@ -1,0 +1,13 @@
+# 网格搜索测试配置
+model_name_or_path: /path/to/bert-base-uncased
+train_file: data/train.csv
+validation_files: data/val.csv
+text_column_names: sentence
+metric_name: accuracy
+do_train: true
+do_eval: true
+num_train_epochs: 1
+max_train_samples: 100
+max_eval_samples: 50
+output_dir: output/test_grid
+report_to: tensorboard

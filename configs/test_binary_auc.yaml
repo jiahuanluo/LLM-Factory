@@ -2,7 +2,7 @@
 # 用法: python run_classification.py configs/test_binary_auc.yaml
 # 多卡: torchrun --nproc_per_node 8 run_classification.py configs/test_binary_auc.yaml
 
-model_name_or_path: ~/.cache/huggingface/hub/models--bert-base-uncased/snapshots/86b5e0934494bd15c9632b12f734a8a67f723594
+model_name_or_path: /path/to/bert-base-uncased
 dataset_name: imdb
 text_column_names: text
 metric_name: auc
