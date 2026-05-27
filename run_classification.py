@@ -734,6 +734,16 @@ def main():
         metric_name = "accuracy"
     logger.info(f"Using metric '{metric_name}' for evaluation.")
 
+    if training_args.metric_for_best_model is not None:
+        expected_prefix = f"eval_{metric_name}"
+        best_metric = training_args.metric_for_best_model
+        # auc/ks 会额外输出 per-label 指标如 eval_auc_xxx，所以也允许前缀匹配
+        if best_metric != expected_prefix and not best_metric.startswith(expected_prefix + "_"):
+            raise ValueError(
+                f"metric_for_best_model='{best_metric}' 与 metric_name='{metric_name}' 不匹配。"
+                f"预期以 '{expected_prefix}' 开头，请检查配置。"
+            )
+
     def compute_metrics(p: EvalPrediction):
         preds = p.predictions[0] if isinstance(p.predictions, tuple) else p.predictions
         if is_regression:
