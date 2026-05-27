@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 import datasets
 import numpy as np
 import scipy.special
-from datasets import Value, load_dataset
+from datasets import Value, load_dataset, Sequence
 from sklearn.metrics import accuracy_score, roc_auc_score, roc_curve, mean_squared_error, f1_score
 
 import transformers
@@ -476,8 +476,10 @@ def main():
                     raise error
 
     else:  # classification
+        _label_feature = raw_datasets["train"].features["label"]
+        _is_list_label = isinstance(_label_feature, Sequence)
         # Cast float labels to int for classification (e.g., 0.0/1.0 -> 0/1)
-        if raw_datasets["train"].features["label"].dtype in ["float32", "float64"]:
+        if not _is_list_label and getattr(_label_feature, "dtype", None) in ["float32", "float64"]:
             logger.info("Label dtype is float, casting to int32 for classification.")
             features = raw_datasets["train"].features.copy()
             features.update({"label": Value("int32")})
@@ -485,7 +487,7 @@ def main():
                 if "label" in raw_datasets[split].features:
                     raw_datasets[split] = raw_datasets[split].cast(features)
 
-        if raw_datasets["train"].features["label"].dtype == "list":  # multi-label classification
+        if _is_list_label:  # multi-label classification
             is_multi_label = True
             logger.info("Label type is list, doing multi-label classification")
         # Trying to find the number of labels in a multi-label classification task
