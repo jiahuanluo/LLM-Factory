@@ -749,13 +749,19 @@ def main():
                     try:
                         auc = roc_auc_score(p.label_ids[:, i], preds[:, i])
                         result[f"auc_{label_name}"] = auc if not np.isnan(auc) else 0.0
-                    except ValueError:
-                        result[f"auc_{label_name}"] = 0.0
+                    except ValueError as e:
+                        raise RuntimeError(
+                            f"无法计算标签 '{label_name}' 的 AUC 指标: {e}。"
+                            f"请检查验证集是否包含足够多的正负样本。"
+                        ) from e
                     try:
                         fpr, tpr, _ = roc_curve(p.label_ids[:, i], preds[:, i])
                         result[f"ks_{label_name}"] = float(np.max(tpr - fpr))
-                    except ValueError:
-                        result[f"ks_{label_name}"] = 0.0
+                    except ValueError as e:
+                        raise RuntimeError(
+                            f"无法计算标签 '{label_name}' 的 KS 指标: {e}。"
+                            f"请检查验证集是否包含足够多的正负样本。"
+                        ) from e
             return result
         else:
             probs = preds
@@ -771,8 +777,9 @@ def main():
                         score = roc_auc_score(p.label_ids, probs, multi_class="ovr")
                     result["auc"] = score if not np.isnan(score) else 0.0
                 except ValueError as e:
-                    logger.warning(f"Could not compute AUC: {e}")
-                    result["auc"] = 0.0
+                    raise RuntimeError(
+                        f"无法计算 AUC 指标: {e}。请检查验证集是否包含所有类别样本。"
+                    ) from e
                 # Also compute KS for binary classification
                 if probs.shape[1] == 2:
                     fpr, tpr, _ = roc_curve(p.label_ids, probs[:, 1])
