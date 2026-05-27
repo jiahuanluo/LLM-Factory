@@ -504,7 +504,7 @@ def main():
                     label_list += list(diff)
         # if label is -1, we throw a warning and remove it from the label list
         for label in label_list:
-            if label == -1:
+            if label == "-1":
                 logger.warning("Label -1 found in label list, removing it.")
                 label_list.remove(label)
 
