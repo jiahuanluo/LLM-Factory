@@ -307,24 +307,11 @@ def main():
             trust_remote_code=model_args.trust_remote_code,
         )
         if "validation" not in raw_datasets:
-            raw_datasets["validation"] = load_dataset(
-                data_args.dataset_name,
-                data_args.dataset_config_name,
-                split=f"train[:{data_args.validation_split_percentage}%]",
-                cache_dir=model_args.cache_dir,
-                token=model_args.token,
-                streaming=data_args.streaming,
-                trust_remote_code=model_args.trust_remote_code,
+            split = raw_datasets["train"].train_test_split(
+                test_size=data_args.validation_split_percentage / 100, seed=42
             )
-            raw_datasets["train"] = load_dataset(
-                data_args.dataset_name,
-                data_args.dataset_config_name,
-                split=f"train[{data_args.validation_split_percentage}%:]",
-                cache_dir=model_args.cache_dir,
-                token=model_args.token,
-                streaming=data_args.streaming,
-                trust_remote_code=model_args.trust_remote_code,
-            )
+            raw_datasets["train"] = split["train"]
+            raw_datasets["validation"] = split["test"]
     else:
         data_files = {}
         if data_args.train_file is not None:
@@ -344,20 +331,11 @@ def main():
 
         # If no validation data is there, validation_split_percentage will be used to divide the dataset.
         if "validation" not in raw_datasets:
-            raw_datasets["validation"] = load_dataset(
-                extension,
-                data_files=data_files,
-                split=f"train[:{data_args.validation_split_percentage}%]",
-                cache_dir=model_args.cache_dir,
-                token=model_args.token,
+            split = raw_datasets["train"].train_test_split(
+                test_size=data_args.validation_split_percentage / 100, seed=42
             )
-            raw_datasets["train"] = load_dataset(
-                extension,
-                data_files=data_files,
-                split=f"train[{data_args.validation_split_percentage}%:]",
-                cache_dir=model_args.cache_dir,
-                token=model_args.token,
-            )
+            raw_datasets["train"] = split["train"]
+            raw_datasets["validation"] = split["test"]
 
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.
