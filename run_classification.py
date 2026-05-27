@@ -546,7 +546,7 @@ def main():
     )
 
     # Check UNK token ratio on a random sample before training
-    def check_unk_ratio(tokenizer, dataset, text_column, num_samples=100, threshold=0.1):
+    def check_unk_ratio(tokenizer, dataset, text_column, num_samples=100, threshold=0.1, max_length=512):
         import random
         unk_id = tokenizer.unk_token_id
         if unk_id is None:
@@ -557,7 +557,7 @@ def main():
         samples = [s for s in samples if s and not s.isspace()]
         if not samples:
             return
-        encodings = tokenizer(samples, truncation=True, max_length=512, return_attention_mask=False)
+        encodings = tokenizer(samples, truncation=True, max_length=max_length, return_attention_mask=False)
         total_tokens = 0
         unk_tokens = 0
         for ids in encodings["input_ids"]:
@@ -577,7 +577,8 @@ def main():
         else:
             _features = list(raw_datasets["train"].features)
             _check_text_col = "sentence" if "sentence" in _features else _features[0]
-        check_unk_ratio(tokenizer, raw_datasets["train"], _check_text_col)
+        check_unk_ratio(tokenizer, raw_datasets["train"], _check_text_col,
+                        max_length=data_args.max_seq_length or 512)
 
     model = AutoModelForSequenceClassification.from_pretrained(
         model_args.model_name_or_path,

@@ -403,7 +403,7 @@ def main():
         model.resize_token_embeddings(len(tokenizer))
 
     # Check UNK token ratio on a random sample before training
-    def check_unk_ratio(tokenizer, dataset, text_column, num_samples=100, threshold=0.1):
+    def check_unk_ratio(tokenizer, dataset, text_column, num_samples=100, threshold=0.1, max_length=512):
         import random
         unk_id = tokenizer.unk_token_id
         if unk_id is None:
@@ -414,7 +414,7 @@ def main():
         samples = [s for s in samples if s and not s.isspace()]
         if not samples:
             return
-        encodings = tokenizer(samples, truncation=True, max_length=512, return_attention_mask=False)
+        encodings = tokenizer(samples, truncation=True, max_length=max_length, return_attention_mask=False)
         total_tokens = 0
         unk_tokens = 0
         for ids in encodings["input_ids"]:
@@ -436,7 +436,8 @@ def main():
 
     if training_args.local_rank in [-1, 0]:
         check_split = "train" if training_args.do_train else "validation"
-        check_unk_ratio(tokenizer, raw_datasets[check_split], text_column_name)
+        check_unk_ratio(tokenizer, raw_datasets[check_split], text_column_name,
+                        max_length=data_args.max_seq_length or 512)
 
     if data_args.max_seq_length is None:
         max_seq_length = tokenizer.model_max_length
