@@ -627,7 +627,7 @@ def main():
     def multi_labels_to_ids(labels: list[str]) -> list[float]:
         ids = [0.0] * len(label_to_id)  # BCELoss requires float as target type
         for label in labels:
-            ids[label_to_id[label]] = 1.0
+            ids[label_to_id[str(label)]] = 1.0
         return ids
 
     def preprocess_function(examples):
