@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 
 import datasets
 import numpy as np
+import scipy.special
 from datasets import Value, load_dataset
 from sklearn.metrics import accuracy_score, roc_auc_score, roc_curve, mean_squared_error, f1_score
 
@@ -863,7 +864,7 @@ def main():
                 # For multi-class, output argmax label
                 if raw_predictions.shape[1] == 2:
                     # Binary: softmax to get probabilities, output class 1 probability
-                    probs = np.exp(raw_predictions) / np.sum(np.exp(raw_predictions), axis=1, keepdims=True)
+                    probs = scipy.special.softmax(raw_predictions, axis=1)
                     predictions = probs[:, 1]
                 else:
                     predictions = np.argmax(raw_predictions, axis=1)
