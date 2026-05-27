@@ -14,22 +14,6 @@ def _expand_paths(config):
     return config
 
 
-def _parse_numeric(config):
-    """Convert YAML strings that look like numbers to int or float."""
-    for key, value in config.items():
-        if isinstance(value, str):
-            try:
-                float_val = float(value)
-                # Convert to int if it's a whole number (e.g., "16" -> 16, not 16.0)
-                if float_val == int(float_val) and 'e' not in value.lower() and '.' not in value:
-                    config[key] = int(float_val)
-                else:
-                    config[key] = float_val
-            except ValueError:
-                pass
-    return config
-
-
 def read_args(parser):
     """Parse arguments from YAML, JSON, or CLI."""
     if len(sys.argv) > 1 and sys.argv[1].endswith((".yaml", ".yml")):
@@ -51,7 +35,6 @@ def read_args(parser):
                 else:
                     i += 1
         config = _expand_paths(config)
-        config = _parse_numeric(config)
         return parser.parse_dict(config)
     elif len(sys.argv) > 1 and sys.argv[1].endswith(".json"):
         return parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
