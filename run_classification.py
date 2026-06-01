@@ -871,7 +871,7 @@ def main():
             if is_regression:
                 predictions = np.squeeze(raw_predictions)
             elif is_multi_label:
-                predictions = np.array([np.where(p > 0, 1, 0) for p in raw_predictions])
+                predictions = scipy.special.expit(raw_predictions)  # sigmoid probabilities
             else:
                 # For binary classification, output probability of positive class (class 1)
                 # For multi-class, output argmax label
@@ -894,9 +894,9 @@ def main():
                         if is_regression:
                             writer.write(f"{index}\t{item:3.3f}\n")
                         elif is_multi_label:
-                            # recover from multi-hot encoding
-                            item = [label_list[i] for i in range(len(item)) if item[i] == 1]
-                            writer.write(f"{index}\t{item}\n")
+                            # output per-label probabilities
+                            probs = {label_list[i]: f"{item[i]:.6f}" for i in range(len(item))}
+                            writer.write(f"{index}\t{probs}\n")
                         elif raw_predictions.shape[1] == 2:
                             # Binary classification: output probability
                             writer.write(f"{index}\t{item:.6f}\n")
