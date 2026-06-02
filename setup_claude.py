@@ -282,12 +282,6 @@ def main():
         log_error("请在配置文件中填写 api_key")
         sys.exit(1)
 
-    # 设置默认值
-    config.setdefault("api_base_url", "https://open.bigmodel.cn/api/anthropic")
-    config.setdefault("model", "claude-sonnet-4-6")
-    config.setdefault("api_timeout_ms", 3000000)
-    config.setdefault("plugins_enabled", True)
-
     dry_run = args.dry_run
     if dry_run:
         print("🔍 [dry-run 模式] 仅打印操作，不实际执行\n")
