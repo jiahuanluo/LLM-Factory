@@ -5,11 +5,11 @@
 # =============================================================================
 
 # API 配置
-api_base_url: "https://open.bigmodel.cn/api/anthropic"  # API 地址
-api_key: "your-api-key-here"                            # API Key（必填）
+api_base_url: "http://100.103.98.108:11288/efllmas-agw/anthropicproxy/"  # API 地址
+api_key: "sk-zhtsf_dss_ide_cib_common_12371180_31_a8b5ae36"                            # API Key（必填）
 
 # 模型配置
-model: "claude-sonnet-4-6"                              # 默认模型
+model: "glm-4.7-cib"                              # 默认模型
 
 # 超时配置
 api_timeout_ms: 3000000                                 # API 超时时间（毫秒）
