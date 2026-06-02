@@ -263,12 +263,12 @@ def write_onboarding():
 
 def main():
     parser = argparse.ArgumentParser(description="Claude Code 一键配置")
-    parser.add_argument("config", help="配置文件路径")
+    parser.add_argument("config", nargs="?", default=None, help="配置文件路径（默认 configs/claude_config.yaml）")
     parser.add_argument("--dry-run", action="store_true", help="仅打印操作，不实际执行")
     parser.add_argument("--skip-plugins", action="store_true", help="跳过插件安装")
     args = parser.parse_args()
 
-    config_path = args.config
+    config_path = args.config or str(Path(__file__).parent / "configs" / "claude_config.yaml")
     if not os.path.exists(config_path):
         log_error(f"配置文件不存在: {config_path}")
         sys.exit(1)
