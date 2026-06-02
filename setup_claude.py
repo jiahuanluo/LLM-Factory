@@ -65,6 +65,8 @@ def install_plugins(config, dry_run=False):
     """离线安装插件到 ~/.claude/plugins/"""
     plugins_dir = config.get("plugins_dir", "deploy/plugins")
     plugins_src = Path(plugins_dir)
+    if not plugins_src.is_absolute():
+        plugins_src = Path(__file__).parent / plugins_src
 
     if not plugins_src.exists():
         log_error(f"插件目录不存在: {plugins_src}")
@@ -156,15 +158,34 @@ def install_plugins(config, dry_run=False):
                 json.dump(installed, f, indent=2, ensure_ascii=False)
             log_success(f"已写入插件注册表: {installed_dst}（{len(filtered_plugins)} 个插件）")
 
-    # 4. 复制 known_marketplaces.json
+    # 4. 处理 known_marketplaces.json（只保留已部署的 marketplace）
     known_src = plugins_src / "known_marketplaces.json"
     if known_src.exists():
+        with open(known_src) as f:
+            known = json.load(f)
+
+        # 只保留已部署的 marketplace
+        deployed_mkt = set()
+        if cache_src.exists():
+            for marketplace_dir in cache_src.iterdir():
+                if marketplace_dir.is_dir():
+                    deployed_mkt.add(marketplace_dir.name)
+        mkt_src = plugins_src / "marketplaces"
+        if mkt_src.exists():
+            for mkt_dir in mkt_src.iterdir():
+                if mkt_dir.is_dir():
+                    deployed_mkt.add(mkt_dir.name)
+
+        filtered_known = {k: v for k, v in known.items() if k in deployed_mkt}
+
         known_dst = plugins_dst / "known_marketplaces.json"
         if dry_run:
-            log_info(f"[dry-run] 将写入: {known_dst}")
+            log_info(f"[dry-run] 将写入: {known_dst}（{len(filtered_known)} 个 marketplace）")
         else:
-            shutil.copy2(known_src, known_dst)
-            log_success(f"已写入 marketplace 注册表: {known_dst}")
+            plugins_dst.mkdir(parents=True, exist_ok=True)
+            with open(known_dst, "w") as f:
+                json.dump(filtered_known, f, indent=2, ensure_ascii=False)
+            log_success(f"已写入 marketplace 注册表: {known_dst}（{len(filtered_known)} 个 marketplace）")
 
     return True
 
