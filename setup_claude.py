@@ -75,22 +75,22 @@ def install_plugins(config, dry_run=False):
     home = Path.home()
     plugins_dst = home / ".claude" / "plugins"
 
-    # 1. 复制 cache 目录（只追加，不覆盖）
+    # 1. 复制 cache 目录（只追加，不覆盖），排除 .in_use 运行时文件
     cache_src = plugins_src / "cache"
+    ignore_in_use = shutil.ignore_patterns(".in_use")
     if cache_src.exists():
         for marketplace_dir in cache_src.iterdir():
             if not marketplace_dir.is_dir():
                 continue
             dst = plugins_dst / "cache" / marketplace_dir.name
             if dst.exists():
-                # 只复制不存在的插件子目录
                 for plugin_dir in marketplace_dir.iterdir():
                     plugin_dst = dst / plugin_dir.name
                     if not plugin_dst.exists():
                         if dry_run:
                             log_info(f"[dry-run] 将复制: {plugin_dir} -> {plugin_dst}")
                         else:
-                            shutil.copytree(plugin_dir, plugin_dst)
+                            shutil.copytree(plugin_dir, plugin_dst, ignore=ignore_in_use)
                             log_success(f"已安装插件: {plugin_dir.name}")
                     else:
                         log_info(f"插件已存在，跳过: {plugin_dir.name}")
@@ -98,7 +98,7 @@ def install_plugins(config, dry_run=False):
                 if dry_run:
                     log_info(f"[dry-run] 将复制: {marketplace_dir} -> {dst}")
                 else:
-                    shutil.copytree(marketplace_dir, dst)
+                    shutil.copytree(marketplace_dir, dst, ignore=ignore_in_use)
                     log_success(f"已安装 marketplace: {marketplace_dir.name}")
 
     # 2. 复制 marketplaces 目录
@@ -176,7 +176,15 @@ def install_plugins(config, dry_run=False):
                 if mkt_dir.is_dir():
                     deployed_mkt.add(mkt_dir.name)
 
-        filtered_known = {k: v for k, v in known.items() if k in deployed_mkt}
+        filtered_known = {}
+        for k, v in known.items():
+            if k not in deployed_mkt:
+                continue
+            v = dict(v)
+            if "installLocation" in v:
+                mkt_name = Path(v["installLocation"]).name
+                v["installLocation"] = str(plugins_dst / "marketplaces" / mkt_name)
+            filtered_known[k] = v
 
         known_dst = plugins_dst / "known_marketplaces.json"
         if dry_run:
