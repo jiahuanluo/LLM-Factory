@@ -12,31 +12,30 @@
 2. **准备数据**：从数据库对应的 token 串表获取文本和 label，导出为 CSV/JSON 格式
 3. **上传到 MLSS 平台进行微调**
 
+---
+
+## 容器环境配置
+
+登录 MLSS v2 平台，新建 Jupyter 实例，按以下配置选择：
+
+| 配置项 | 华为昇腾 | 英伟达 |
+|---|---|---|
+| 项目组 | gp-erm-da | gp-erm-da |
+| 镜像类型 | 公共镜像 | 待补充 |
+| 镜像 | `MLSS-AIDE_1.33.0_cann8.0.0_910b_py3.10_torch2.4.0_20250303_img` | 待补充 |
+| 资源配置 | 专属资源 | 待补充 |
+| 命名空间 | ns-erm-da1 ~ ns-erm-da10 | 待补充 |
+| 容器类型 | 自定义 | 自定义 |
+| 内存 / CPU | 按需填写 | 按需填写 |
+| CPU 类型 | KunPeng | 待补充 |
+| GPU 类型 | 910B3 | 待补充 |
+| GPU 数量 | 按需选择，最高 8 | 按需选择，最高 8 |
+
 ## 功能概览
 
 - **文本分类微调** (`run_classification.py`) — 二分类 / 多分类 / 多标签 / 回归，支持 AUC、KS、Accuracy 等指标
 - **MLM 继续预训练** (`run_mlm.py`) — BERT、RoBERTa、ALBERT 等掩码语言模型继续预训练
 - **Claude Code 离线部署** (`setup_claude.py`) — 离线环境一键安装 Claude Code + 插件
-
----
-
-## 环境安装
-
-```bash
-pip install -r requirements.txt
-```
-
-核心依赖：
-
-| 包 | 用途 |
-|---|---|
-| `transformers>=4.57.0` | 模型加载、训练框架 |
-| `datasets>=2.14.0` | 数据加载 |
-| `torch>=1.3` | 深度学习框架 |
-| `accelerate>=0.12.0` | 分布式训练 |
-| `scikit-learn` | 评估指标（AUC、KS、F1 等） |
-| `scipy` | softmax、sigmoid 数值稳定计算 |
-| `pyyaml>=6.0` | YAML 配置解析 |
 
 ---
 
