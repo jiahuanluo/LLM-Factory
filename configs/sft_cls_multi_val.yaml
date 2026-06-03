@@ -29,3 +29,5 @@ greater_is_better: true
 
 # 日志
 report_to: tensorboard
+cache_dir: ~/workspace/cache  # 留空或 null 则用 HuggingFace 默认路径（~/.cache/huggingface/）
+trust_remote_code: true

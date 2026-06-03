@@ -32,3 +32,5 @@ save_strategy: epoch
 # 日志
 logging_steps: 50
 report_to: tensorboard
+cache_dir: ~/workspace/cache  # 留空或 null 则用 HuggingFace 默认路径（~/.cache/huggingface/）
+trust_remote_code: true
