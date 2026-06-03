@@ -1,6 +1,16 @@
 # LLM-Factory
 
-基于 HuggingFace Transformers 的 LLM 微调与预训练工具集，支持文本分类、掩码语言模型（MLM）继续预训练，以及 Claude Code 离线环境一键部署。
+基于 HuggingFace Transformers 的文本分类微调工具集，支持二分类 / 多分类 / 多标签 / 回归任务，以及 MLM 继续预训练。
+
+## 实际使用流程
+
+```
+模型广场下载 checkpoint → 数据库拉取 token 文本 + label → 导入 MLSS 微调 → 输出预测结果
+```
+
+1. **下载预训练模型**：从模型广场获取对应的预训练 checkpoint，放到 `cache_dir`（默认 `~/workspace/cache`）或直接指定本地路径
+2. **准备数据**：从数据库对应的 token 串表获取文本和 label，导出为 CSV/JSON 格式
+3. **上传到 MLSS 平台进行微调**
 
 ## 功能概览
 
@@ -32,52 +42,54 @@ pip install -r requirements.txt
 
 ## 快速开始
 
-### 1. 文本分类（二分类 AUC）
+### 1. 文本分类微调
 
 ```bash
-# 准备数据：CSV 格式，包含 text 列和 label 列
+# 准备数据：从数据库导出 CSV，包含文本列和 label 列
 # data/train.csv 示例：
 # sentence,label
 # "This movie is great.",1
 # "Terrible film.",0
 
 # 训练 + 评估
-python run_classification.py configs/sft_cls_auc.yaml
+python run_classification.py configs/sft_cls.yaml
 
 # CLI 覆盖参数
-python run_classification.py configs/sft_cls_auc.yaml --learning_rate 1e-4 --num_train_epochs 5
+python run_classification.py configs/sft_cls.yaml --learning_rate 1e-4 --num_train_epochs 5
 ```
 
-### 2. MLM 继续预训练
+### 2. 预测
+
+```bash
+# 修改 model_name_or_path 指向微调后的 checkpoint
+python run_classification.py configs/predict_cls.yaml
+```
+
+### 3. MLM 继续预训练
 
 ```bash
 # 准备数据：每行一句纯文本
-# data/train.txt 示例：
-# This is a sentence for pretraining.
-# Another sentence for the model to learn from.
-
-# 训练
 python run_mlm.py configs/pt_mlm.yaml
 ```
 
-### 3. 多卡训练
+### 4. 多卡训练
 
 ```bash
 # 2 卡
-torchrun --nproc_per_node 2 run_classification.py configs/sft_cls_auc.yaml
+torchrun --nproc_per_node 2 run_classification.py configs/sft_cls.yaml
 
 # 8 卡
-torchrun --nproc_per_node 8 run_classification.py configs/sft_cls_auc.yaml
+torchrun --nproc_per_node 8 run_classification.py configs/sft_cls.yaml
 ```
 
-### 4. DeepSpeed 训练
+### 5. DeepSpeed 训练
 
 ```bash
 # ZeRO-2（推荐大多数场景）
-torchrun --nproc_per_node 8 run_classification.py configs/sft_cls_auc.yaml --deepspeed configs/ds_z2.json
+torchrun --nproc_per_node 8 run_classification.py configs/sft_cls.yaml --deepspeed configs/ds_z2.json
 
 # ZeRO-3（超大模型）
-torchrun --nproc_per_node 8 run_classification.py configs/sft_cls_auc.yaml --deepspeed configs/ds_z3.json
+torchrun --nproc_per_node 8 run_classification.py configs/sft_cls.yaml --deepspeed configs/ds_z3.json
 ```
 
 ---
@@ -134,13 +146,18 @@ do_predict: true
 test_file: data/test.csv  # 多个用逗号分隔: test1.csv,test2.csv
 ```
 
-输出格式：
-- **二分类**：输出正类概率（0~1 浮点数）
-- **多分类**：输出预测标签名
-- **多标签**：输出每个标签的 sigmoid 概率（JSON 格式）
-- **回归**：输出预测值
+预测结果保留原始数据中所有非文本列，附加 `prediction` 列：
 
-结果保存到 `output_dir/predict_results.txt`（单文件）或 `predict_results_test_0.txt`（多文件）。
+| 任务 | prediction 格式 |
+|---|---|
+| 二分类 | 正类概率（0~1） |
+| 多分类 | 预测标签名 |
+| 多标签 | 各标签 sigmoid 概率 |
+| 回归 | 预测值 |
+
+自动排除：文本列（`text_column_names`）、`label` 列、tokenizer 列。可通过 `remove_columns` 额外排除指定列。
+
+单测试集输出 `predict_results.txt`，多测试集输出 `predict_results_test_0.txt`、`predict_results_test_1.txt` 等。
 
 ### 完整配置参考
 
@@ -151,6 +168,10 @@ train_file: data/train.csv               # 训练集
 validation_files: data/val.csv           # 验证集（多个逗号分隔）
 text_column_names: sentence              # 文本列名（多列逗号分隔）
 output_dir: output/my_model              # 输出目录
+
+# === 模型缓存 ===
+cache_dir: ~/workspace/cache             # 模型缓存目录，留空或 null 用 HuggingFace 默认路径
+trust_remote_code: true                  # 信任远程代码
 
 # === 常用 ===
 learning_rate: 2e-5                      # 学习率
@@ -234,6 +255,10 @@ model_name_or_path: bert-base-uncased    # 模型路径
 train_file: data/train.txt               # 训练数据
 output_dir: output/mlm                   # 输出目录
 
+# === 模型缓存 ===
+cache_dir: ~/workspace/cache             # 模型缓存目录，留空或 null 用 HuggingFace 默认路径
+trust_remote_code: true                  # 信任远程代码
+
 # === 常用 ===
 learning_rate: 5e-5                      # 学习率（MLM 通常比微调大）
 num_train_epochs: 10                     # 训练轮次
@@ -263,10 +288,10 @@ logging_steps: 50                        # 日志间隔
 
 ```bash
 # 1. 纯 YAML
-python run_classification.py configs/sft_cls_auc.yaml
+python run_classification.py configs/sft_cls.yaml
 
 # 2. YAML + CLI 覆盖（CLI 优先）
-python run_classification.py configs/sft_cls_auc.yaml --learning_rate 1e-4 --num_train_epochs 5
+python run_classification.py configs/sft_cls.yaml --learning_rate 1e-4 --num_train_epochs 5
 
 # 3. 纯 CLI（兼容 HuggingFace 原生方式）
 python run_classification.py --model_name_or_path bert-base-uncased --train_file data/train.csv --do_train
@@ -283,8 +308,10 @@ python run_classification.py --model_name_or_path bert-base-uncased --train_file
 
 | 文件 | 用途 |
 |---|---|
+| `configs/sft_cls.yaml` | 分类微调（accuracy） |
 | `configs/sft_cls_auc.yaml` | 二分类 AUC 评估（风控场景） |
 | `configs/sft_cls_multi_val.yaml` | 多验证集评估 |
+| `configs/predict_cls.yaml` | 分类预测 |
 | `configs/example_cls.yaml` | 分类完整配置示例（带详细注释） |
 | `configs/pt_mlm.yaml` | MLM 继续预训练 |
 | `configs/example_mlm.yaml` | MLM 完整配置示例（带详细注释） |
@@ -301,10 +328,10 @@ python run_classification.py --model_name_or_path bert-base-uncased --train_file
 
 ```bash
 # 自动恢复
-python run_classification.py configs/sft_cls_auc.yaml
+python run_classification.py configs/sft_cls.yaml
 
 # 指定 checkpoint
-python run_classification.py configs/sft_cls_auc.yaml --resume_from_checkpoint output/my_model/checkpoint-500
+python run_classification.py configs/sft_cls.yaml --resume_from_checkpoint output/my_model/checkpoint-500
 ```
 
 ### UNK Token 检查
@@ -369,7 +396,7 @@ plugins_dir: "deploy/plugins"                      # 插件源目录
 
 ### 离线插件
 
-`deploy/plugins/` 目录包含预打包的插件快照（约 11MB）：
+`deploy/plugins/` 目录包含预打包的插件快照：
 
 - **superpowers** — 增强技能系统
 - **code-review** — 代码审查
@@ -391,6 +418,8 @@ LLM-Factory/
 ├── setup_claude.py                # Claude Code 离线部署脚本
 ├── requirements.txt               # Python 依赖
 ├── configs/                       # 配置文件模板
+│   ├── sft_cls.yaml              # 分类微调
+│   ├── predict_cls.yaml          # 分类预测
 │   ├── sft_cls_auc.yaml          # 二分类 AUC
 │   ├── sft_cls_multi_val.yaml    # 多验证集
 │   ├── example_cls.yaml          # 分类完整示例
