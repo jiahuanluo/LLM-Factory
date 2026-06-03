@@ -315,13 +315,15 @@ class NewEmbeddings(nn.Module):
             max_position_embeddings=config.max_position_embeddings,
             base=config.rope_theta
         )
-        if config.rope_scaling is None:
+        # transformers >= 4.39 may rename rope_scaling to rope_parameters
+        rope_scaling = getattr(config, 'rope_scaling', None) or getattr(config, 'rope_parameters', None)
+        if rope_scaling is None:
             self.rotary_emb = RotaryEmbedding(**kwargs)
         else:
-            kwargs.update(scaling_factor=config.rope_scaling["factor"])
-            scaling_type = config.rope_scaling["type"]
+            kwargs.update(scaling_factor=rope_scaling["factor"])
+            scaling_type = rope_scaling["type"]
             if scaling_type == 'ntk':
-                kwargs.update(mixed_b=config.rope_scaling.get('mixed_b', None))
+                kwargs.update(mixed_b=rope_scaling.get('mixed_b', None))
                 self.rotary_emb = NTKScalingRotaryEmbedding(**kwargs)
             # elif scaling_type == "linear":
             #     self.rotary_emb = LinearScalingRotaryEmbedding(**kwargs)
@@ -393,16 +395,12 @@ class NewEmbeddings(nn.Module):
 
         # Set and unpad position_ids
         if position_ids is None:
-            if seq_length > self.position_ids.size(0):
-                self.register_buffer(
-                    "position_ids", torch.arange(seq_length, device=embeddings.device), persistent=False
-                )
             if unpad_inputs:
                 # [1, cumsum_seq_len]
-                position_ids = torch.cat([self.position_ids[:l] for l in length]).unsqueeze(0)
+                position_ids = torch.cat([torch.arange(l, device=embeddings.device) for l in length]).unsqueeze(0)
             else:
                 # [bs, seq_len]
-                position_ids = self.position_ids[:seq_length].expand(batch_size, -1)
+                position_ids = torch.arange(seq_length, device=embeddings.device).expand(batch_size, -1)
         elif unpad_inputs:
             position_ids = position_ids[attention_mask_bool].unsqueeze(0)  # [1, cumsum_seq_len]
 
