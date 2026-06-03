@@ -862,10 +862,24 @@ def main():
 
     if training_args.do_predict:
         logger.info("*** Predict ***")
+        # Determine columns to exclude from output: text columns + label
+        exclude_cols = {"label"}
+        if data_args.text_column_names is not None:
+            exclude_cols.update(c.strip() for c in data_args.text_column_names.split(","))
+        if data_args.remove_columns is not None:
+            exclude_cols.update(c.strip() for c in data_args.remove_columns.split(","))
+        # Preprocess tokenizer columns to exclude
+        tokenizer_cols = {"input_ids", "token_type_ids", "attention_mask"}
+
         for split_name, predict_dataset in predict_datasets.items():
             # Removing the `label` columns if exists because it might contains -1 and Trainer won't like that.
             if "label" in predict_dataset.features:
                 predict_dataset = predict_dataset.remove_columns("label")
+            # Save original row data (non-tokenizer, non-excluded columns) before prediction
+            all_cols = list(predict_dataset.features.keys())
+            keep_cols = [c for c in all_cols if c not in exclude_cols and c not in tokenizer_cols]
+            rows = [{c: predict_dataset[i][c] for c in keep_cols} for i in range(len(predict_dataset))]
+
             predict_result = trainer.predict(predict_dataset, metric_key_prefix="predict")
             raw_predictions = predict_result.predictions
             if is_regression:
@@ -889,20 +903,20 @@ def main():
             if trainer.is_world_process_zero():
                 with open(output_predict_file, "w") as writer:
                     logger.info(f"***** Predict results for {split_name} *****")
-                    writer.write("index\tprediction\n")
+                    header = "\t".join(keep_cols + ["prediction"])
+                    writer.write(header + "\n")
                     for index, item in enumerate(predictions):
+                        cols = [str(rows[index][c]) for c in keep_cols]
                         if is_regression:
-                            writer.write(f"{index}\t{item:3.3f}\n")
+                            cols.append(f"{item:3.3f}")
                         elif is_multi_label:
-                            # output per-label probabilities
                             probs = {label_list[i]: f"{item[i]:.6f}" for i in range(len(item))}
-                            writer.write(f"{index}\t{probs}\n")
+                            cols.append(str(probs))
                         elif raw_predictions.shape[1] == 2:
-                            # Binary classification: output probability
-                            writer.write(f"{index}\t{item:.6f}\n")
+                            cols.append(f"{item:.6f}")
                         else:
-                            item = label_list[item]
-                            writer.write(f"{index}\t{item}\n")
+                            cols.append(label_list[item])
+                        writer.write("\t".join(cols) + "\n")
             logger.info(f"Predict results saved at {output_predict_file}")
     kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "text-classification"}
 
