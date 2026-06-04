@@ -940,4 +940,8 @@ def _mp_fn(index):
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        logging.getLogger(__name__).exception("Training failed with exception")
+        raise
