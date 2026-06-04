@@ -483,15 +483,20 @@ def main():
 
         with training_args.main_process_first(desc="dataset map tokenization"):
             if not data_args.streaming:
-                tokenized_datasets = raw_datasets.map(
-                    tokenize_function,
-                    batched=True,
-                    num_proc=data_args.preprocessing_num_workers,
-                    remove_columns=[text_column_name],
-                    load_from_cache_file=not data_args.overwrite_cache,
-                    desc="Running tokenizer on dataset line_by_line",
-                    disable=training_args.process_index != 0,
-                )
+                _tokenized_cache = os.path.join(training_args.output_dir, "_tokenized_cache")
+                if training_args.process_index == 0:
+                    tokenized_datasets = raw_datasets.map(
+                        tokenize_function,
+                        batched=True,
+                        num_proc=data_args.preprocessing_num_workers,
+                        remove_columns=[text_column_name],
+                        load_from_cache_file=not data_args.overwrite_cache,
+                        desc="Running tokenizer on dataset line_by_line",
+                    )
+                    tokenized_datasets.save_to_disk(_tokenized_cache)
+                else:
+                    from datasets import load_from_disk
+                    tokenized_datasets = load_from_disk(_tokenized_cache)
             else:
                 tokenized_datasets = raw_datasets.map(
                     tokenize_function,
@@ -507,15 +512,20 @@ def main():
 
         with training_args.main_process_first(desc="dataset map tokenization"):
             if not data_args.streaming:
-                tokenized_datasets = raw_datasets.map(
-                    tokenize_function,
-                    batched=True,
-                    num_proc=data_args.preprocessing_num_workers,
-                    remove_columns=column_names,
-                    load_from_cache_file=not data_args.overwrite_cache,
-                    desc="Running tokenizer on every text in dataset",
-                    disable=training_args.process_index != 0,
-                )
+                _tokenized_cache = os.path.join(training_args.output_dir, "_tokenized_cache")
+                if training_args.process_index == 0:
+                    tokenized_datasets = raw_datasets.map(
+                        tokenize_function,
+                        batched=True,
+                        num_proc=data_args.preprocessing_num_workers,
+                        remove_columns=column_names,
+                        load_from_cache_file=not data_args.overwrite_cache,
+                        desc="Running tokenizer on every text in dataset",
+                    )
+                    tokenized_datasets.save_to_disk(_tokenized_cache)
+                else:
+                    from datasets import load_from_disk
+                    tokenized_datasets = load_from_disk(_tokenized_cache)
             else:
                 tokenized_datasets = raw_datasets.map(
                     tokenize_function,
@@ -548,14 +558,19 @@ def main():
 
         with training_args.main_process_first(desc="grouping texts together"):
             if not data_args.streaming:
-                tokenized_datasets = tokenized_datasets.map(
-                    group_texts,
-                    batched=True,
-                    num_proc=data_args.preprocessing_num_workers,
-                    load_from_cache_file=not data_args.overwrite_cache,
-                    desc=f"Grouping texts in chunks of {max_seq_length}",
-                    disable=training_args.process_index != 0,
-                )
+                _grouped_cache = os.path.join(training_args.output_dir, "_grouped_cache")
+                if training_args.process_index == 0:
+                    tokenized_datasets = tokenized_datasets.map(
+                        group_texts,
+                        batched=True,
+                        num_proc=data_args.preprocessing_num_workers,
+                        load_from_cache_file=not data_args.overwrite_cache,
+                        desc=f"Grouping texts in chunks of {max_seq_length}",
+                    )
+                    tokenized_datasets.save_to_disk(_grouped_cache)
+                else:
+                    from datasets import load_from_disk
+                    tokenized_datasets = load_from_disk(_grouped_cache)
             else:
                 tokenized_datasets = tokenized_datasets.map(
                     group_texts,
