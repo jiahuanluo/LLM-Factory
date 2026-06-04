@@ -680,6 +680,7 @@ def main():
             num_proc=data_args.preprocessing_num_workers,
             load_from_cache_file=not data_args.overwrite_cache,
             desc="Running tokenizer on dataset",
+            disable=training_args.process_index != 0,
         )
 
     if training_args.do_train:

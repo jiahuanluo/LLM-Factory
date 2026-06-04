@@ -490,6 +490,7 @@ def main():
                     remove_columns=[text_column_name],
                     load_from_cache_file=not data_args.overwrite_cache,
                     desc="Running tokenizer on dataset line_by_line",
+                    disable=training_args.process_index != 0,
                 )
             else:
                 tokenized_datasets = raw_datasets.map(
@@ -513,6 +514,7 @@ def main():
                     remove_columns=column_names,
                     load_from_cache_file=not data_args.overwrite_cache,
                     desc="Running tokenizer on every text in dataset",
+                    disable=training_args.process_index != 0,
                 )
             else:
                 tokenized_datasets = raw_datasets.map(
@@ -552,6 +554,7 @@ def main():
                     num_proc=data_args.preprocessing_num_workers,
                     load_from_cache_file=not data_args.overwrite_cache,
                     desc=f"Grouping texts in chunks of {max_seq_length}",
+                    disable=training_args.process_index != 0,
                 )
             else:
                 tokenized_datasets = tokenized_datasets.map(
