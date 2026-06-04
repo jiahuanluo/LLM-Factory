@@ -673,14 +673,21 @@ def main():
         return result
 
     # Running the preprocessing pipeline on all the datasets
+    # Rank 0 tokenize 后 save_to_disk，其他 rank 直接 load_from_disk，避免多卡重复 tokenize
     with training_args.main_process_first(desc="dataset map pre-processing"):
-        raw_datasets = raw_datasets.map(
-            preprocess_function,
-            batched=True,
-            num_proc=data_args.preprocessing_num_workers,
-            load_from_cache_file=not data_args.overwrite_cache,
-            desc="Running tokenizer on dataset",
-        )
+        _tokenized_cache_dir = os.path.join(training_args.output_dir, "_tokenized_cache")
+        if training_args.process_index == 0:
+            raw_datasets = raw_datasets.map(
+                preprocess_function,
+                batched=True,
+                num_proc=data_args.preprocessing_num_workers,
+                load_from_cache_file=not data_args.overwrite_cache,
+                desc="Running tokenizer on dataset",
+            )
+            raw_datasets.save_to_disk(_tokenized_cache_dir)
+        else:
+            from datasets import load_from_disk
+            raw_datasets = load_from_disk(_tokenized_cache_dir)
 
     if training_args.do_train:
         if "train" not in raw_datasets:
