@@ -305,11 +305,15 @@ def main():
 
     # Setup logging
     os.makedirs(training_args.output_dir, exist_ok=True)
-    log_file = os.path.join(training_args.output_dir, "train.log")
+    log_handlers = [logging.StreamHandler(sys.stdout)]
+    # Only rank 0 writes to log file to avoid multi-process file conflicts
+    if training_args.process_index == 0:
+        log_file = os.path.join(training_args.output_dir, "train.log")
+        log_handlers.append(logging.FileHandler(log_file, mode="a", encoding="utf-8"))
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S",
-        handlers=[logging.StreamHandler(sys.stdout), logging.FileHandler(log_file, mode="a", encoding="utf-8")],
+        handlers=log_handlers,
     )
 
     if training_args.should_log:
