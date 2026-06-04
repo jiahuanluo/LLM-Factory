@@ -1157,7 +1157,7 @@ class NewLMPredictionHead(nn.Module):
 
 
 class NewForMaskedLM(NewPreTrainedModel):
-    _tied_weights_keys = ["lm_head.decoder.bias", "lm_head.decoder.weight"]
+    _tied_weights_keys = []
 
     def __init__(self, config: NewConfig):
         super().__init__(config)

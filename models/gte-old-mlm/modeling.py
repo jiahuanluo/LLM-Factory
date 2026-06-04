@@ -251,57 +251,6 @@ class NTKScalingRotaryEmbedding(RotaryEmbedding):
         self.register_buffer("sin_cached", emb.sin().to(dtype), persistent=False)
 
 
-class YaRNScalingRotaryEmbedding(RotaryEmbedding):
-    """YaRN: Yet another RoPE extensioN. https://arxiv.org/abs/2309.00071"""
-
-    def __init__(self, dim, max_position_embeddings=512, base=10000, device=None,
-                 scaling_factor=1.0, original_max_position_embeddings=512,
-                 attn_factor=1.0, beta_fast=32, beta_slow=1):
-        self.scaling_factor = scaling_factor
-        self.original_max_position_embeddings = original_max_position_embeddings
-        self.attn_factor = attn_factor
-        self.beta_fast = beta_fast
-        self.beta_slow = beta_slow
-        super().__init__(dim, max_position_embeddings, base, device)
-        # Rebuild cache with YaRN scaling
-        self._set_cos_sin_cache(max_position_embeddings, self.inv_freq.device, torch.get_default_dtype())
-
-    @staticmethod
-    def yarn_find_correction_range(low_rot, high_rot, dim, base=10000):
-        low = math.floor(dim * math.log(low_rot / (2 * math.pi * base)) / (2 * math.log(base)))
-        high = math.ceil(dim * math.log(high_rot / (2 * math.pi * base)) / (2 * math.log(base)))
-        return max(low, 0), min(high, dim - 1)
-
-    @staticmethod
-    def yarn_ramp_mask(low, high, dim):
-        if low == high:
-            high += 0.001
-        linear_func = (torch.arange(dim, dtype=torch.float32) - low) / (high - low)
-        return linear_func.clamp(0, 1)
-
-    def _set_cos_sin_cache(self, seq_len, device, dtype):
-        self.max_seq_len_cached = seq_len
-
-        freq_extra = 1.0 / (self.base ** (torch.arange(0, self.dim, 2).float().to(device) / self.dim))
-        freq_inter = 1.0 / (self.scaling_factor * self.base ** (torch.arange(0, self.dim, 2).float().to(device) / self.dim))
-
-        low, high = self.yarn_find_correction_range(
-            self.beta_fast, self.beta_slow, self.dim, self.base
-        )
-        ramp_mask = self.yarn_ramp_mask(low, high, self.dim // 2).to(device)
-
-        inv_freq = freq_inter * (1 - ramp_mask) + freq_extra * ramp_mask
-        self.register_buffer("inv_freq", inv_freq, persistent=False)
-
-        t = torch.arange(self.max_seq_len_cached, device=device, dtype=torch.float32)
-        freqs = torch.einsum("i,j->ij", t, self.inv_freq)
-        emb = torch.cat((freqs, freqs), dim=-1)
-
-        scale = self.attn_factor / (self.scaling_factor ** (self.dim / (self.dim - 2)))
-        self.register_buffer("cos_cached", (emb.cos() * scale).to(dtype), persistent=False)
-        self.register_buffer("sin_cached", (emb.sin() * scale).to(dtype), persistent=False)
-
-
 class RMSNorm(nn.Module):
     def __init__(self, hidden_size, eps=1e-6):
         """
@@ -376,16 +325,10 @@ class NewEmbeddings(nn.Module):
             if scaling_type == 'ntk':
                 kwargs.update(mixed_b=rope_scaling.get('mixed_b', None))
                 self.rotary_emb = NTKScalingRotaryEmbedding(**kwargs)
-            elif scaling_type == 'yarn':
-                kwargs.update(
-                    original_max_position_embeddings=rope_scaling.get(
-                        'original_max_position_embeddings', config.max_position_embeddings
-                    ),
-                    attn_factor=rope_scaling.get('attn_factor', 1.0),
-                    beta_fast=rope_scaling.get('beta_fast', 32),
-                    beta_slow=rope_scaling.get('beta_slow', 1),
-                )
-                self.rotary_emb = YaRNScalingRotaryEmbedding(**kwargs)
+            # elif scaling_type == "linear":
+            #     self.rotary_emb = LinearScalingRotaryEmbedding(**kwargs)
+            # elif scaling_type == "dynamic":
+            #     self.rotary_emb = DynamicNTKScalingRotaryEmbedding(**kwargs)
             else:
                 raise ValueError(f"Unknown RoPE scaling type {scaling_type}")
 
@@ -493,7 +436,7 @@ class NewEmbeddings(nn.Module):
 
 
 class NewAttention(nn.Module):
-    def __init__(self, config: NewConfig, use_memory_efficient_attention=None):
+    def __init__(self, config: NewConfig, pack_qkv=None, use_memory_efficient_attention=None):
         super().__init__()
         self.config = config
         if config.hidden_size % config.num_attention_heads != 0 and not hasattr(config, "embedding_size"):
@@ -507,16 +450,16 @@ class NewAttention(nn.Module):
         self.attention_head_size = int(config.hidden_size / config.num_attention_heads)
         self.all_head_size = self.num_attention_heads * self.attention_head_size
 
-        # GQA: num_kv_heads <= num_attention_heads
-        self.num_kv_heads = getattr(config, 'num_kv_heads', None) or config.num_attention_heads
-        self.kv_head_size = self.attention_head_size
-        self.kv_all_head_size = self.num_kv_heads * self.kv_head_size
-        self.num_kv_groups = self.num_attention_heads // self.num_kv_heads
+        if pack_qkv is None:
+            pack_qkv = config.pack_qkv
+        self.pack_qkv = pack_qkv
 
-        # Q/K/V always separate projections (GQA incompatible with fused QKV)
-        self.q_proj = nn.Linear(config.hidden_size, self.all_head_size, bias=True)
-        self.k_proj = nn.Linear(config.hidden_size, self.kv_all_head_size, bias=True)
-        self.v_proj = nn.Linear(config.hidden_size, self.kv_all_head_size, bias=True)
+        if self.pack_qkv:
+            self.qkv_proj = nn.Linear(config.hidden_size, self.all_head_size * 3, bias=True)
+        else:
+            self.q_proj = nn.Linear(config.hidden_size, self.all_head_size, bias=True)
+            self.k_proj = nn.Linear(config.hidden_size, self.all_head_size, bias=True)
+            self.v_proj = nn.Linear(config.hidden_size, self.all_head_size, bias=True)
 
         self.dropout = nn.Dropout(config.attention_probs_dropout_prob)
         self.o_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=True)
@@ -539,17 +482,17 @@ class NewAttention(nn.Module):
         output_attentions: Optional[bool] = False,
         qkv_inputs: Optional[Tuple] = None,  # For RetroMAE
     ) -> Tuple[torch.Tensor, ...]:
-        # Q/K/V projections
-        if qkv_inputs is None:
-            qkv_inputs = (hidden_states, hidden_states, hidden_states)
-        query_states = self.q_proj(qkv_inputs[0]).view(qkv_inputs[0].shape[:-1] + (self.num_attention_heads, self.attention_head_size))
-        key_states = self.k_proj(qkv_inputs[1]).view(qkv_inputs[1].shape[:-1] + (self.num_kv_heads, self.attention_head_size))
-        value_states = self.v_proj(qkv_inputs[2]).view(qkv_inputs[2].shape[:-1] + (self.num_kv_heads, self.attention_head_size))
-
-        # GQA: repeat K/V heads to match Q heads
-        if self.num_kv_groups > 1:
-            key_states = key_states.repeat_interleave(self.num_kv_groups, dim=2)
-            value_states = value_states.repeat_interleave(self.num_kv_groups, dim=2)
+        shape_hd = (self.num_attention_heads, self.attention_head_size)
+        # qkv
+        if self.pack_qkv and qkv_inputs is None:
+            qkv_pack = self.qkv_proj(hidden_states).split(self.all_head_size, dim=-1)
+        else:
+            if qkv_inputs is None:
+                qkv_inputs = (hidden_states, hidden_states, hidden_states)
+            qkv_pack = [
+                getattr(self, n + '_proj')(s) for s, n in zip(qkv_inputs, 'qkv')
+            ]
+        query_states, key_states, value_states = [t.view(t.shape[:-1] + shape_hd) for t in qkv_pack]
 
         if self.config.position_embedding_type == 'rope':
             query_states, key_states = apply_rotary_pos_emb(query_states, key_states, *rope_embeds)
@@ -698,6 +641,7 @@ class NewLayer(nn.Module):
     def __init__(
         self,
         config: NewConfig,
+        pack_qkv=None,
         use_memory_efficient_attention=None,
         attn_implementation=None
     ):
@@ -711,7 +655,7 @@ class NewLayer(nn.Module):
                 logger.warning_once(f"Override {attn_implementation=} to 'eager' as {use_memory_efficient_attention=}")
                 attn_implementation = 'eager'  # Since it will be SDPA by default for torch>=2.1.1
         self.attention = NEW_ATTENTION_CLASSES[attn_implementation](
-            config, use_memory_efficient_attention=use_memory_efficient_attention
+            config, pack_qkv=pack_qkv, use_memory_efficient_attention=use_memory_efficient_attention
         )
         self.mlp = NewGatedMLP(config)
 
@@ -736,9 +680,8 @@ class NewLayer(nn.Module):
         output_attentions: Optional[bool] = False,
         qkv_inputs: Optional[Tuple] = None,  # For RetroMAE
     ) -> Tuple[torch.Tensor, ...]:
-        # Pre-norm self attention
+        # Multi head self attention
         residual = hidden_states if qkv_inputs is None else qkv_inputs[0]
-        hidden_states = self.attn_ln(hidden_states)
         attention_outputs = self.attention(
             hidden_states,
             attention_bias,
@@ -758,13 +701,15 @@ class NewLayer(nn.Module):
         if subset_indices is not None:
             hidden_states = hidden_states[subset_indices]
 
-        # Pre-norm FFN
+        hidden_states = self.attn_ln(hidden_states)
+
+        # Fully Connected
         residual = hidden_states
-        hidden_states = self.mlp_ln(hidden_states)
         hidden_states = self.mlp(hidden_states)
         if self.hidden_dropout is not None:
             hidden_states = self.hidden_dropout(hidden_states)
         hidden_states = residual + hidden_states
+        hidden_states = self.mlp_ln(hidden_states)
 
         # add self attentions if we output attention weights
         outputs = (hidden_states,) + attention_outputs[1:]
@@ -896,33 +841,6 @@ class NewPreTrainedModel(PreTrainedModel):
             module.weight.data.fill_(1.0)
 
 
-class LatentPooling(nn.Module):
-    """Latent Attention Pooling (NV-Embed style). Uses learnable latent queries
-    to attend to the sequence via cross-attention."""
-
-    def __init__(self, config: NewConfig):
-        super().__init__()
-        self.num_latents = getattr(config, 'num_latents', 1)
-        self.latents = nn.Parameter(torch.randn(self.num_latents, config.hidden_size) * 0.02)
-        self.cross_attn = nn.MultiheadAttention(
-            config.hidden_size, config.num_attention_heads,
-            dropout=config.attention_probs_dropout_prob, batch_first=True
-        )
-        ln_class = LAYER_NORM[config.layer_norm_type]
-        self.norm = ln_class(config.hidden_size, eps=config.layer_norm_eps)
-
-    def forward(self, hidden_states: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        batch_size = hidden_states.size(0)
-        latents = self.latents.unsqueeze(0).expand(batch_size, -1, -1)
-        key_padding_mask = ~(attention_mask.bool()) if attention_mask is not None else None
-        pooled, _ = self.cross_attn(
-            query=latents, key=hidden_states, value=hidden_states,
-            key_padding_mask=key_padding_mask
-        )
-        pooled = self.norm(pooled)
-        return pooled.squeeze(1) if self.num_latents == 1 else pooled.mean(dim=1)
-
-
 class NewModel(NewPreTrainedModel):
     """
     The bare New Model transformer outputting raw hidden-states without any specific head on top.
@@ -935,16 +853,7 @@ class NewModel(NewPreTrainedModel):
         self.embeddings = NewEmbeddings(config)
         self.encoder = NewEncoder(config)
 
-        # Pooling strategy: "latent" (cross-attention) or "mean" (default)
-        self.pooling_type = getattr(config, 'pooling_type', 'mean')
-        self.add_pooling_layer = add_pooling_layer
-        if add_pooling_layer:
-            if self.pooling_type == 'latent':
-                self.pooler = LatentPooling(config)
-            else:
-                self.pooler = None  # mean pooling done in forward
-        else:
-            self.pooler = None
+        self.pooler = NewPooler(config) if add_pooling_layer else None
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1115,16 +1024,7 @@ class NewModel(NewPreTrainedModel):
             indices, batch_size, seq_length
         )
 
-        # Pooling
-        if self.pooler is not None:
-            # Latent attention pooling (NV-Embed style)
-            pooled_output = self.pooler(sequence_output, attention_mask)
-        elif self.add_pooling_layer and self.pooling_type == 'mean':
-            # Mean pooling: average over non-padding tokens
-            mask = attention_mask.unsqueeze(-1).to(sequence_output.dtype)
-            pooled_output = (sequence_output * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1e-9)
-        else:
-            pooled_output = None
+        pooled_output = self.pooler(sequence_output) if self.pooler is not None else None
 
         if not return_dict:
             return (sequence_output, pooled_output) + encoder_outputs[1:]
@@ -1157,7 +1057,7 @@ class NewLMPredictionHead(nn.Module):
 
 
 class NewForMaskedLM(NewPreTrainedModel):
-    _tied_weights_keys = ["lm_head.decoder.bias", "lm_head.decoder.weight"]
+    _tied_weights_keys = []
 
     def __init__(self, config: NewConfig):
         super().__init__(config)
@@ -1259,53 +1159,8 @@ class NewForSequenceClassification(NewPreTrainedModel):
         self.dropout = nn.Dropout(classifier_dropout)
         self.classifier = nn.Linear(config.hidden_size, config.num_labels)
 
-        # Matryoshka embedding: train with multiple embedding dimensions
-        self.matryoshka_dims = getattr(config, 'matryoshka_dims', None)
-
         # Initialize weights and apply final processing
         self.post_init()
-
-    def _compute_loss(self, logits, labels):
-        """Compute classification loss based on problem type."""
-        if labels is None:
-            return None
-        if self.config.problem_type is None:
-            if self.num_labels == 1:
-                self.config.problem_type = "regression"
-            elif self.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
-                self.config.problem_type = "single_label_classification"
-            else:
-                self.config.problem_type = "multi_label_classification"
-
-        if self.config.problem_type == "regression":
-            loss_fct = nn.MSELoss()
-            if self.num_labels == 1:
-                return loss_fct(logits.squeeze(), labels.squeeze())
-            return loss_fct(logits, labels)
-        elif self.config.problem_type == "single_label_classification":
-            return nn.CrossEntropyLoss()(logits.view(-1, self.num_labels), labels.view(-1))
-        elif self.config.problem_type == "multi_label_classification":
-            return nn.BCEWithLogitsLoss()(logits, labels)
-        return None
-
-    def _matryoshka_loss(self, pooled_output, labels):
-        """Matryoshka Representation Learning: compute loss at multiple dimensions.
-        Truncated embeddings are zero-padded to hidden_size before classification."""
-        hidden_size = pooled_output.size(-1)
-        loss = 0.0
-        num_dims = len(self.matryoshka_dims)
-        for dim in self.matryoshka_dims:
-            if dim > hidden_size:
-                continue
-            # Truncate then zero-pad to original hidden_size
-            sub_pooled = torch.zeros_like(pooled_output)
-            sub_pooled[:, :dim] = pooled_output[:, :dim]
-            sub_pooled = self.dropout(sub_pooled)
-            sub_logits = self.classifier(sub_pooled)
-            dim_loss = self._compute_loss(sub_logits, labels)
-            if dim_loss is not None:
-                loss = loss + dim_loss / num_dims
-        return loss
 
     def forward(
         self,
@@ -1344,14 +1199,31 @@ class NewForSequenceClassification(NewPreTrainedModel):
 
         pooled_output = outputs[1]
 
-        # Matryoshka: compute loss at multiple embedding dimensions
-        if self.matryoshka_dims and labels is not None and self.training:
-            loss = self._matryoshka_loss(pooled_output, labels)
-            logits = self.classifier(self.dropout(pooled_output))
-        else:
-            pooled_output = self.dropout(pooled_output)
-            logits = self.classifier(pooled_output)
-            loss = self._compute_loss(logits, labels)
+        pooled_output = self.dropout(pooled_output)
+        logits = self.classifier(pooled_output)
+
+        loss = None
+        if labels is not None:
+            if self.config.problem_type is None:
+                if self.num_labels == 1:
+                    self.config.problem_type = "regression"
+                elif self.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
+                    self.config.problem_type = "single_label_classification"
+                else:
+                    self.config.problem_type = "multi_label_classification"
+
+            if self.config.problem_type == "regression":
+                loss_fct = nn.MSELoss()
+                if self.num_labels == 1:
+                    loss = loss_fct(logits.squeeze(), labels.squeeze())
+                else:
+                    loss = loss_fct(logits, labels)
+            elif self.config.problem_type == "single_label_classification":
+                loss_fct = nn.CrossEntropyLoss()
+                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+            elif self.config.problem_type == "multi_label_classification":
+                loss_fct = nn.BCEWithLogitsLoss()
+                loss = loss_fct(logits, labels)
 
         if not return_dict:
             output = (logits,) + outputs[2:]

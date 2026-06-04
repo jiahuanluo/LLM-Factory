@@ -1127,11 +1127,12 @@ class NewForMaskedLM(NewPreTrainedModel):
         if labels is not None:
             if subset_indices is None:
                 mask = attention_mask.bool()
-                prediction_scores = prediction_scores[mask]
-                labels = labels[mask]
+                loss_scores = prediction_scores[mask]
+                loss_labels = labels[mask]
             else:
-                labels = labels[subset_indices]
-            masked_lm_loss = self.loss_fct(prediction_scores, labels)
+                loss_scores = prediction_scores
+                loss_labels = labels[subset_indices]
+            masked_lm_loss = self.loss_fct(loss_scores, loss_labels)
 
         if not return_dict:
             output = (prediction_scores,) + outputs[2:]
