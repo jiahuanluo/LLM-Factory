@@ -8,9 +8,23 @@
 模型广场下载 checkpoint → 数据库拉取 token 文本 + label → 导入 MLSS 微调 → 输出预测结果
 ```
 
-1. **下载预训练模型**：从模型广场获取对应的预训练 checkpoint，放到 `cache_dir`（默认 `~/workspace/cache`）或直接指定本地路径
+1. **下载预训练模型**：MLSS v2 平台 → AI资产管理 → 模型管理，选择对应的预训练模型（如主模型预训练模型、B端预训练模型、个人征信预训练模型），将对应版本导出到本地
 2. **准备数据**：从数据库对应的 token 串表获取文本和 label，导出为 CSV/JSON 格式
 3. **上传到 MLSS 平台进行微调**
+
+---
+
+## 预训练模型下载
+
+在 MLSS v2 平台下载预训练 checkpoint：
+
+1. 进入 **AI资产管理** → **模型管理**
+2. 找到目标预训练模型，当前可用的模型包括：
+   - **主模型预训练模型**
+   - **B端预训练模型**
+   - **个人征信预训练模型**
+3. 选择所需版本，点击 **导出到本地**
+4. 将导出的模型文件放到 `cache_dir`（默认 `~/workspace/cache`），或在配置中通过 `model_name_or_path` 直接指定路径
 
 ---
 
@@ -336,6 +350,20 @@ python run_classification.py configs/sft_cls.yaml --resume_from_checkpoint outpu
 ### UNK Token 检查
 
 训练前自动检查 tokenizer 与数据的匹配度：随机采样 100 条数据，统计 UNK token 占比。超过 10% 会报错停止，提示检查 tokenizer 是否与数据语言匹配。
+
+### 训练日志
+
+训练日志自动保存到 `output_dir/train.log`，包含完整的训练过程和异常信息：
+
+```bash
+# 查看训练日志
+cat output/my_model/train.log
+
+# 实时跟踪训练进度
+tail -f output/my_model/train.log
+```
+
+日志内容包括：训练参数、每步 loss、评估指标、checkpoint 保存、异常 traceback 等。
 
 ### TensorBoard
 
