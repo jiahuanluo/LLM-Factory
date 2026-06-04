@@ -259,10 +259,12 @@ def main():
     model_args, data_args, training_args = read_args(parser)
 
     # Setup logging
+    os.makedirs(training_args.output_dir, exist_ok=True)
+    log_file = os.path.join(training_args.output_dir, "train.log")
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S",
-        handlers=[logging.StreamHandler(sys.stdout)],
+        handlers=[logging.StreamHandler(sys.stdout), logging.FileHandler(log_file, mode="a", encoding="utf-8")],
     )
 
     if training_args.should_log:

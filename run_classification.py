@@ -304,10 +304,12 @@ def main():
     model_args, data_args, training_args = read_args(parser)
 
     # Setup logging
+    os.makedirs(training_args.output_dir, exist_ok=True)
+    log_file = os.path.join(training_args.output_dir, "train.log")
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S",
-        handlers=[logging.StreamHandler(sys.stdout)],
+        handlers=[logging.StreamHandler(sys.stdout), logging.FileHandler(log_file, mode="a", encoding="utf-8")],
     )
 
     if training_args.should_log:
@@ -582,16 +584,22 @@ def main():
         check_unk_ratio(tokenizer, raw_datasets["train"], _check_text_col,
                         max_length=data_args.max_seq_length or 512)
 
-    model = AutoModelForSequenceClassification.from_pretrained(
-        model_args.model_name_or_path,
-        from_tf=bool(".ckpt" in model_args.model_name_or_path),
-        config=config,
-        cache_dir=model_args.cache_dir,
-        revision=model_args.model_revision,
-        token=model_args.token,
-        trust_remote_code=model_args.trust_remote_code,
-        ignore_mismatched_sizes=model_args.ignore_mismatched_sizes,
-    )
+    if model_args.model_name_or_path:
+        model = AutoModelForSequenceClassification.from_pretrained(
+            model_args.model_name_or_path,
+            from_tf=bool(".ckpt" in model_args.model_name_or_path),
+            config=config,
+            cache_dir=model_args.cache_dir,
+            revision=model_args.model_revision,
+            token=model_args.token,
+            trust_remote_code=model_args.trust_remote_code,
+            ignore_mismatched_sizes=model_args.ignore_mismatched_sizes,
+        )
+    else:
+        logger.info("model_name_or_path is None, initializing model from config (random weights)")
+        model = AutoModelForSequenceClassification.from_config(
+            config, trust_remote_code=model_args.trust_remote_code
+        )
 
     # Padding strategy
     if data_args.pad_to_max_length:
