@@ -3,10 +3,12 @@
 import os
 import re
 import sys
+from datetime import datetime
 
 import yaml
 
 _NUM_RE = re.compile(r'^-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$')
+_VAR_RE = re.compile(r'\$\{([^}]+)\}')
 
 
 def _coerce_numeric(config):
@@ -21,6 +23,29 @@ def _coerce_numeric(config):
                     config[key] = float_val
             except ValueError:
                 pass
+    return config
+
+
+def _expand_vars(config):
+    """Expand ${var} references in string values, supporting cross-parameter refs and ${timestamp}."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+    max_iterations = 5  # prevent infinite loops from circular refs
+    for _ in range(max_iterations):
+        changed = False
+        for key, value in config.items():
+            if isinstance(value, str) and _VAR_RE.search(value):
+                def replacer(m):
+                    nonlocal changed
+                    ref = m.group(1)
+                    if ref == "timestamp":
+                        return timestamp
+                    if ref in config and config[ref] is not None:
+                        changed = True
+                        return str(config[ref])
+                    return m.group(0)  # leave unresolved refs as-is
+                config[key] = _VAR_RE.sub(replacer, value)
+        if not changed:
+            break
     return config
 
 
@@ -52,6 +77,7 @@ def read_args(parser):
                         i += 1
                 else:
                     i += 1
+        config = _expand_vars(config)
         config = _expand_paths(config)
         config = _coerce_numeric(config)
         return parser.parse_dict(config)
