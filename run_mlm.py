@@ -506,8 +506,12 @@ def main():
 
         with training_args.main_process_first(desc="dataset map tokenization"):
             if not data_args.streaming:
-                _tokenized_cache = os.path.join(training_args.output_dir, "_tokenized_cache")
-                if training_args.process_index == 0:
+                tokenized_cache_dir = os.path.join(datasets.config.HF_DATASETS_CACHE, f"_tokenized_mlm_{raw_datasets['train']._fingerprint}")
+                from datasets import load_from_disk
+                if os.path.exists(tokenized_cache_dir):
+                    tokenized_datasets = load_from_disk(tokenized_cache_dir)
+                    logger.info("Loaded tokenized datasets from cache.")
+                elif training_args.process_index == 0:
                     tokenized_datasets = raw_datasets.map(
                         tokenize_function,
                         batched=True,
@@ -516,10 +520,11 @@ def main():
                         load_from_cache_file=not data_args.overwrite_cache,
                         desc="Running tokenizer on every text in dataset",
                     )
-                    tokenized_datasets.save_to_disk(_tokenized_cache)
+                    tokenized_datasets.save_to_disk(tokenized_cache_dir)
+                    logger.info("Tokenized datasets and saved to cache.")
                 else:
-                    from datasets import load_from_disk
-                    tokenized_datasets = load_from_disk(_tokenized_cache)
+                    tokenized_datasets = load_from_disk(tokenized_cache_dir)
+                    logger.info("Loaded tokenized datasets from cache (non-rank-0).")
             else:
                 tokenized_datasets = raw_datasets.map(
                     tokenize_function,

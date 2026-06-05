@@ -673,10 +673,13 @@ def main():
         return result
 
     # Running the preprocessing pipeline on all the datasets
-    # Rank 0 tokenize 后 save_to_disk，其他 rank 直接 load_from_disk，避免多卡重复 tokenize
+    tokenized_cache_dir = os.path.join(datasets.config.HF_DATASETS_CACHE, f"_tokenized_cls_{raw_datasets['train']._fingerprint}")
     with training_args.main_process_first(desc="dataset map pre-processing"):
-        _tokenized_cache_dir = os.path.join(training_args.output_dir, "_tokenized_cache")
-        if training_args.process_index == 0:
+        from datasets import load_from_disk
+        if os.path.exists(tokenized_cache_dir):
+            raw_datasets = load_from_disk(tokenized_cache_dir)
+            logger.info(f"Loaded tokenized datasets from cache: {tokenized_cache_dir}")
+        elif training_args.process_index == 0:
             raw_datasets = raw_datasets.map(
                 preprocess_function,
                 batched=True,
@@ -684,10 +687,11 @@ def main():
                 load_from_cache_file=not data_args.overwrite_cache,
                 desc="Running tokenizer on dataset",
             )
-            raw_datasets.save_to_disk(_tokenized_cache_dir)
+            raw_datasets.save_to_disk(tokenized_cache_dir)
+            logger.info(f"Tokenized datasets and saved to cache: {tokenized_cache_dir}")
         else:
-            from datasets import load_from_disk
-            raw_datasets = load_from_disk(_tokenized_cache_dir)
+            raw_datasets = load_from_disk(tokenized_cache_dir)
+            logger.info(f"Loaded tokenized datasets from cache (non-rank-0): {tokenized_cache_dir}")
 
     if training_args.do_train:
         if "train" not in raw_datasets:
