@@ -67,4 +67,3 @@ python run_classification.py --model_name_or_path <model> --train_file train.csv
 - YAML 配置支持：`read_args()` 函数解析 YAML/JSON/CLI，支持 YAML + CLI 覆盖
 - checkpoint 自动恢复：`--resume_from_checkpoint` 不指定时自动从 `output_dir` 最新 checkpoint 恢复
 - `datasets` 日志级别固定为 WARNING，避免分布式环境下重复输出
-- 多卡 tokenize 缓存：rank 0 tokenize 后 `save_to_disk`，其他 rank `load_from_disk`。缓存路径为 `HF_DATASETS_CACHE/_tokenized_{cls|mlm}_{fingerprint}/`，换数据/参数自动用新缓存，重复训练直接复用
