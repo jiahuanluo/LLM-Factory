@@ -30,6 +30,11 @@ models/gte-old-scratch/
 .omc/
 models/.omc/
 
+# Claude Code 插件：本地 git 仓库和运行时状态（ZIP 分发用真实文件）
+deploy/plugins/**/.git/
+deploy/plugins/**/.in_use/
+deploy/plugins/**/.omc/
+
 # 编辑器 / 系统
 .vscode/
 .idea/
