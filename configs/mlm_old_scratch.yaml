@@ -1,0 +1,27 @@
+# 旧架构 MLM 预训练
+model_name_or_path: null
+config_name: models/gte-old-mlm
+tokenizer_name: models/gte-large-en-v1.5
+train_file: data/imdb_mlm/train.csv
+validation_file: data/imdb_mlm/val.csv
+output_dir: output/mlm_old_scratch
+
+max_seq_length: 256
+mlm_probability: 0.15
+line_by_line: true
+pad_to_max_length: true
+
+num_train_epochs: 1
+per_device_train_batch_size: 8
+per_device_eval_batch_size: 16
+learning_rate: 1e-4
+warmup_ratio: 0.1
+
+do_train: true
+do_eval: false
+save_strategy: epoch
+logging_steps: 100
+report_to: none
+trust_remote_code: true
+fp16: true
+gradient_checkpointing: true

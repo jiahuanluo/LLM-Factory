@@ -1,9 +1,10 @@
-# GTE 架构对比测试 - IMDB 情感分类
+# GTE 旧架构对比测试 - IMDB 情感分类
 model_name_or_path: models/gte-large-en-v1.5
+config_name: models/gte-large-en-v1.5/config_old.json
 train_file: data/imdb/train.csv
 validation_files: data/imdb/val.csv
 text_column_names: sentence
-output_dir: output/gte_cls_test
+output_dir: output/gte_cls_test_old
 
 learning_rate: 2e-5
 num_train_epochs: 1
