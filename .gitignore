@@ -11,8 +11,8 @@ __pycache__/
 output/
 data/
 
-# 大模型权重目录（保留 tokenizer/config 小目录）
-models/gte-large-en-v1.5/
+# 训练 checkpoint 目录（权重靠 *.safetensors 等兜底规则忽略，
+# 但这些目录里的 config 是训练产物，整体继续忽略）
 models/gte-new-pretrained/
 models/gte-old-pretrained/
 models/gte-new-scratch/
