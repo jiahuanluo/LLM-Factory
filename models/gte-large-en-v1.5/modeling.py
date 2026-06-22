@@ -776,6 +776,9 @@ class NewEncoder(nn.Module):
         super().__init__()
         self.config = config
         self.layer = nn.ModuleList([NewLayer(config) for _ in range(config.num_hidden_layers)])
+        # Pre-norm 架构必须在 encoder 末尾加 final LN 约束 residual stream 量级
+        ln_class = LAYER_NORM[config.layer_norm_type]
+        self.norm = ln_class(config.hidden_size, eps=config.layer_norm_eps)
         self.gradient_checkpointing = False
 
     def forward(
@@ -834,6 +837,8 @@ class NewEncoder(nn.Module):
 
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
+
+        hidden_states = self.norm(hidden_states)
 
         if not return_dict:
             return tuple(
