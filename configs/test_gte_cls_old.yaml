@@ -1,11 +1,24 @@
-# GTE 旧架构对比测试 - IMDB 情感分类
+# =============================================================================
+# 用途: GTE 旧架构分类测试 —— 用 config_old.json 强制走旧架构路径做 IMDB 分类对比
+# 用法: python run_classification.py configs/test_gte_cls_old.yaml
+#   torchrun --nproc_per_node 8 run_classification.py configs/test_gte_cls_old.yaml
+# 必改字段: model_name_or_path, config_name, train_file, validation_files, output_dir
+# 可选项: 其余字段为冒烟测试默认值
+# =============================================================================
+
+# [必改] 模型权重 + 旧架构 config（覆盖默认架构）
 model_name_or_path: models/gte-large-en-v1.5
-config_name: models/gte-large-en-v1.5/config_old.json
+config_name: models/gte-large-en-v1.5/config_old.json   # 指定旧架构配置文件
+
+# [必改] 训练/验证数据
 train_file: data/imdb/train.csv
 validation_files: data/imdb/val.csv
 text_column_names: sentence
+
+# [必改] 输出目录
 output_dir: output/gte_cls_test_old
 
+# [常用] 训练超参
 learning_rate: 2e-5
 num_train_epochs: 1
 per_device_train_batch_size: 8
@@ -13,15 +26,19 @@ per_device_eval_batch_size: 16
 max_seq_length: 256
 metric_name: accuracy
 
+# [常用] 训练/评估开关
 do_train: true
 do_eval: true
 
+# [可选] 评估/保存/日志策略（与新架构测试保持一致以便对比）
 eval_strategy: steps
 eval_steps: 500
 save_strategy: steps
 save_steps: 500
 logging_steps: 100
 report_to: none
+
+# [可选] 性能与稳定性
 trust_remote_code: true
 fp16: true
 gradient_checkpointing: true
