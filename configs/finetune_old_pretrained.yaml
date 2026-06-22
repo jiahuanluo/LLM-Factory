@@ -1,10 +1,23 @@
-# 旧架构 MLM 预训练后微调
+# =============================================================================
+# 用途: GTE 旧架构 MLM 预训练后做 IMDB 情感分类微调（与新架构对比效果）
+# 用法: python run_classification.py configs/finetune_old_pretrained.yaml
+#   torchrun --nproc_per_node 8 run_classification.py configs/finetune_old_pretrained.yaml
+# 必改字段: model_name_or_path, train_file, validation_files, output_dir
+# 可选项: 其余字段均有合理默认值，按需调整
+# =============================================================================
+
+# [必改] 模型路径 —— 指向本地旧架构 MLM 预训练产物目录
 model_name_or_path: models/gte-old-pretrained
+
+# [必改] 训练/验证数据
 train_file: data/imdb/train.csv
 validation_files: data/imdb/val.csv
 text_column_names: sentence
+
+# [必改] 输出目录
 output_dir: output/finetune_old_pretrained
 
+# [常用] 训练超参
 learning_rate: 2e-5
 num_train_epochs: 1
 per_device_train_batch_size: 4
@@ -12,13 +25,18 @@ per_device_eval_batch_size: 8
 max_seq_length: 256
 metric_name: accuracy
 
+# [常用] 训练/评估开关
 do_train: true
 do_eval: true
+
+# [可选] 评估/保存/日志策略
 eval_strategy: steps
 eval_steps: 500
 save_strategy: "no"
 logging_steps: 100
 report_to: none
+
+# [可选] 模型加载与性能（旧架构在 fp16 + grad-checkpoint 下更稳）
 trust_remote_code: true
-fp16: true
-gradient_checkpointing: true
+fp16: true                                   # 启用 FP16 混合精度
+gradient_checkpointing: true                 # 启用梯度检查点，节省显存
