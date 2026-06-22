@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Jupyter
+.ipynb_checkpoints/
+
+# 训练产物与数据
+output/
+data/
+
+# 大模型权重目录（保留 tokenizer/config 小目录）
+models/gte-large-en-v1.5/
+models/gte-new-pretrained/
+models/gte-old-pretrained/
+models/gte-new-scratch/
+models/gte-old-scratch/
+
+# 兜底：误放的权重 / 缓存文件
+*.safetensors
+*.bin
+*.onnx
+*.ckpt
+*.pt
+*.pth
+
+# OMC / 工具状态
+.omc/
+models/.omc/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
