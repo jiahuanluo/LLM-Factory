@@ -1,0 +1,67 @@
+# =============================================================================
+# 预测配置（predict-only 模式 — 推荐最小化配置）
+#
+# 与其他预测配置的区别:
+#   - predict_cls_full.yaml: 全字段完整版（含所有可选参数的详细说明）
+#   - predict_cls.yaml:      兼容写法（保留 train/validation 字段）
+#   - predict_only.yaml:     ⭐ 本文件 — 触发 predict-only 路径的最小配置
+#
+# predict-only 模式触发条件（自动判断，无需显式声明）:
+#   do_predict=true 且 do_train=false 且 do_eval=false 且未设置 train_file
+#
+# predict-only 模式行为:
+#   1. 跳过 train_file / validation_files 加载（避免不必要的 IO）
+#   2. label 信息直接从 model.config.label2id 读取（训练时已写入 ckpt 的 config.json）
+#   3. test_file 可不带 label 列（label 列存在时会被保留到输出，用于事后验证）
+#
+# 用法:
+#   python run_classification.py configs/predict_only.yaml
+#   torchrun --nproc_per_node 8 run_classification.py configs/predict_only.yaml  # 多卡预测
+#
+# 输出:
+#   output_dir/predict_results.csv（保留 test 原始列 + prediction 列，逗号分隔，含逗号字段自动加引号）
+#   多 test 文件时: predict_results_test_0.csv, predict_results_test_1.csv ...
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# [必填] 模型路径 —— 指向训练好的 ckpt 目录（必须含 config.json + label2id）
+# -----------------------------------------------------------------------------
+model_name_or_path: output/test_binary_auc   # 训练产物目录或 HF 模型 id
+                                            #   ckpt 的 config.json 必须有 label2id 字段
+                                            #   （HF Trainer 训练时会自动写入，无需手动配置）
+
+# -----------------------------------------------------------------------------
+# [必填] 测试文件 —— 只需 test_file，不需要 train_file / validation_files
+# -----------------------------------------------------------------------------
+test_file: data/test.csv                    # 真正要预测的数据；逗号分隔多文件 → 多测试集输出
+                                            #   例: data/test_a.csv,data/test_b.csv
+                                            #   支持 CSV / JSON / JSONL 格式
+
+# -----------------------------------------------------------------------------
+# [必填] 文本列与输出目录
+# -----------------------------------------------------------------------------
+text_column_names: sentence                 # 文本列名（必须与训练时一致）
+output_dir: output/predict_only_test        # 输出目录：predict_results.csv 写到这里
+
+# -----------------------------------------------------------------------------
+# [必填] 任务控制 —— 必须是这个组合才触发 predict-only 模式
+# -----------------------------------------------------------------------------
+do_predict: true                            # 启用预测（必填）
+do_train: false                             # 关闭训练（predict-only 必填）
+do_eval: false                              # 关闭评估（predict-only 必填）
+
+# -----------------------------------------------------------------------------
+# [常用] 预测超参 —— 影响 batch 大小和序列长度
+# -----------------------------------------------------------------------------
+per_device_eval_batch_size: 64              # 每 GPU 预测 batch size（仅影响显存和速度，不影响结果）
+max_seq_length: 128                         # ⚠️ 必须与训练时一致；改了会导致预测错位
+
+# -----------------------------------------------------------------------------
+# [可选] 模型加载
+# -----------------------------------------------------------------------------
+trust_remote_code: true                     # 加载自定义模型代码（Qwen / GLM / GTE 等 remote code 必需）
+
+# -----------------------------------------------------------------------------
+# [可选] 日志
+# -----------------------------------------------------------------------------
+report_to: none                             # 预测时通常关掉（none）；需要监控可设 tensorboard

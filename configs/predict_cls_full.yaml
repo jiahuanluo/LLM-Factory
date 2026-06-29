@@ -1,0 +1,135 @@
+# =============================================================================
+# 文本分类预测配置（完整版 — 覆盖所有预测相关参数）
+#
+# 本配置仅用于推理/预测，不训练。训练好的模型通过 model_name_or_path 指向 ckpt 目录。
+#
+# 与 configs/predict_cls.yaml 的区别:
+#   - 本配置是完整版，包含预测路径所有可用字段的详细说明
+#   - predict_cls.yaml 是精简起步版（<30 行），保留 train_file/validation_files 用于兼容
+#
+# ⭐ predict-only 模式（推荐）:
+#   - 仅需 test_file，无需 train_file / validation_files（label 从 model.config.label2id 读）
+#   - 触发条件: do_predict=true 且 do_train=false 且 do_eval=false 且未设置 train_file
+#   - 参考最小配置: configs/predict_only.yaml
+#   - 本配置仍保留 train_file / validation_files 是为了说明兼容写法，可删除这两个字段进入 predict-only 模式
+#
+# 用法:
+#   python run_classification.py configs/predict_cls_full.yaml
+#   torchrun --nproc_per_node 8 run_classification.py configs/predict_cls_full.yaml  # 多卡预测
+#
+# 必填参数: model_name_or_path（指向训练好的 ckpt 目录）, test_file,
+#           text_column_names, output_dir
+#   非预测路径（do_train=true 或 do_eval=true）还需 train_file + validation_files
+#
+# 输出文件:
+#   单测试集 → output_dir/predict_results.csv
+#   多测试集 → output_dir/predict_results_test_0.csv, predict_results_test_1.csv ...
+#   逗号分隔；含逗号/引号的字段会被 csv 模块自动加引号转义
+#   保留原始数据所有非文本列，附加 prediction 列:
+#     二分类 → 正类概率（float，0.0~1.0）
+#     多分类 → 标签名（str）
+#     多标签 → 各标签 sigmoid 概率
+#     回归   → 预测值（float）
+#
+# ⚠️ 关键约束: 以下字段必须与训练时一致，否则结果错位或精度下降
+#   - max_seq_length, text_column_names, text_column_delimiter
+#   - pad_to_max_length, trust_remote_code, ignore_mismatched_sizes
+#   - label 信息自动从 model.config.label2id 读取，无需在 yaml 重复声明
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# [必填] 模型路径 —— 指向训练好的 checkpoint 目录
+# -----------------------------------------------------------------------------
+model_name_or_path: output/cls_full/checkpoint-best  # 训练产出的 ckpt 目录或 HF 模型 id
+                                            #   常见命名: checkpoint-<step>, checkpoint-best
+config_name: null                           # 单独指定模型 config（默认同 model_name_or_path）
+tokenizer_name: null                        # 单独指定 tokenizer（默认同 model_name_or_path）
+cache_dir: ~/workspace/cache                # HF 缓存目录；留空或 null 用默认 ~/.cache/huggingface/
+
+# -----------------------------------------------------------------------------
+# [必填] 数据文件 —— predict-only 模式只需 test_file
+#   train_file / validation_files 在 predict-only 模式下可省略（label 从 model.config 读）
+#   这里保留是为兼容旧用法；如果只想跑预测，删掉这两行触发 predict-only 模式
+# -----------------------------------------------------------------------------
+train_file: data/test.csv                   # 兼容写法；predict-only 模式可省略
+validation_files: data/test.csv             # 兼容写法；predict-only 模式可省略
+test_file: data/test.csv                    # 真正要预测的数据；逗号分隔多文件 → 多测试集输出
+                                            #   例: data/test_a.csv,data/test_b.csv
+
+# -----------------------------------------------------------------------------
+# [必填] 文本列与输出目录
+# -----------------------------------------------------------------------------
+text_column_names: sentence                 # 文本列名（必须与训练时一致）
+text_column_delimiter: "\n\n"               # 多文本列拼接分隔符（必须与训练时一致；默认空格）
+label_column_name: label                    # 标签列名（预测时不强制需要，保留原列用于对齐验证）
+output_dir: output/cls_full/predict         # 输出目录：predict_results_*.csv 写到这里
+
+# -----------------------------------------------------------------------------
+# [必填] 任务控制 —— 预测路径
+# -----------------------------------------------------------------------------
+do_train: false                             # 关闭训练
+do_eval: false                              # 关闭评估
+do_predict: true                            # 启用预测（必填）
+
+# -----------------------------------------------------------------------------
+# [常用] 预测超参 —— 影响 batch 大小和序列长度
+# -----------------------------------------------------------------------------
+per_device_eval_batch_size: 128             # 每 GPU 预测 batch size（仅影响显存和速度，不影响结果）
+max_seq_length: 128                         # ⚠️ 必须与训练时一致；改了会导致预测错位
+metric_name: auc                            # 仅 do_eval=true 时使用；预测路径无影响，保留便于切换
+do_regression: false                        # ⚠️ 必须与训练时一致，影响输出格式（true → 回归，false → 分类）
+
+# -----------------------------------------------------------------------------
+# [可选] 数据采样 —— 大数据集抽样验证时用
+# -----------------------------------------------------------------------------
+max_predict_samples: null                   # 最大预测样本数（null=使用全部）
+                                            #   调试时可设 100 等小值快速验证流程
+
+# -----------------------------------------------------------------------------
+# [可选] 数据处理
+# -----------------------------------------------------------------------------
+preprocessing_num_workers: 40               # tokenize 并行进程数（null=单进程）
+overwrite_cache: false                      # 是否强制重建预处理缓存
+pad_to_max_length: true                     # ⚠️ 必须与训练时一致；改了会影响精度
+# shuffle_train_dataset: 不影响预测（test 集永远不 shuffle）
+
+# -----------------------------------------------------------------------------
+# [可选] 模型加载
+# -----------------------------------------------------------------------------
+ignore_mismatched_sizes: true               # 改了分类头维度时必须开启
+trust_remote_code: true                     # 加载自定义模型代码（Qwen / GLM / GTE 等 remote code 必需）
+use_fast_tokenizer: true                    # 推荐 true（Rust 实现，速度快）
+model_revision: main                        # HF 模型版本（可指定 commit hash 精确锁定）
+token: null                                 # 私有模型 token；建议用环境变量 HF_TOKEN，不要写死
+
+# -----------------------------------------------------------------------------
+# [可选] 性能 —— 多卡预测 / 混合精度
+#   fp16 与 bf16 互斥，只能开一个；都不开则用 fp32
+# -----------------------------------------------------------------------------
+fp16: true                                  # FP16 混合精度（GPU 推理加速）
+bf16: false                                 # BF16 混合精度（A100/H100 推荐，数值范围比 fp16 大）
+gradient_checkpointing: false               # 预测时不前向反向，此参数无影响
+dataloader_num_workers: 4                   # DataLoader 进程数
+
+# -----------------------------------------------------------------------------
+# [可选] 日志配置
+# -----------------------------------------------------------------------------
+logging_dir: output/cls_full/predict/logs   # TensorBoard 日志目录（预测时通常无需关注）
+                                            #   ⚠️ 5.x deprecated，5.2 起改用环境变量 TENSORBOARD_LOGGING_DIR
+logging_strategy: steps                     # 日志策略: no / steps / epoch
+logging_steps: 10                           # 每 N 步记录一次日志
+report_to: none                             # 预测时通常关掉（none）；需要监控可设 tensorboard
+disable_tqdm: false                         # 是否禁用进度条（分布式日志干净可设 true）
+
+# -----------------------------------------------------------------------------
+# [可选] Checkpoint 恢复 —— 预测时一般无需 resume
+# -----------------------------------------------------------------------------
+resume_from_checkpoint: null                # null 时使用 model_name_or_path 指定的权重
+                                            #   预测路径通常不需要 resume，留 null 即可
+
+# -----------------------------------------------------------------------------
+# [可选] 可复现性
+# -----------------------------------------------------------------------------
+seed: 42                                    # 随机种子（推理路径通常确定性，但仍可设）
+data_seed: 42                               # 数据采样种子
+full_determinism: false                     # 严格可复现（会变慢，调试用）

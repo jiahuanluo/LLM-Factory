@@ -1,20 +1,60 @@
-# 分类预测配置
-# 用法: python run_classification.py configs/predict_cls.yaml
-# 多测试集: test_file: data/test_a.csv,data/test_b.csv
+# =============================================================================
+# 预测配置（兼容写法 — 含 train_file / validation_files）
+#
+# ⭐ 推荐改用 configs/predict_only.yaml:
+#   predict-only 模式下 train_file / validation_files 可省略，label 从 model.config 读
+#   本配置保留这两个字段是为兼容旧用法，实际会多加载两个文件（IO 浪费）
+#
+# 何时用本配置（而非 predict_only.yaml）:
+#   - 旧脚本/工作流依赖 train_file + validation_files 存在
+#   - 需要在同一 yaml 里切换 do_train / do_eval / do_predict 不同组合
+#   - model.config 没有 label2id（极少见，比如手动改过的 ckpt）
+#
+# 用法:
+#   python run_classification.py configs/predict_cls.yaml
+#   torchrun --nproc_per_node 8 run_classification.py configs/predict_cls.yaml  # 多卡预测
+#
+# 输出:
+#   output_dir/predict_results.csv（保留 test 原始列 + prediction 列，逗号分隔，含逗号字段自动加引号）
+#   多 test 文件时: predict_results_test_0.csv, predict_results_test_1.csv ...
+# =============================================================================
 
-# 必填（train_file 和 validation_files 用于推断文件格式，不会实际训练）
-model_name_or_path: output/cls/checkpoint-best
-train_file: data/test.csv
-validation_files: data/test.csv
-test_file: data/test.csv
-text_column_names: sentence
-output_dir: output/cls_predict
+# -----------------------------------------------------------------------------
+# [必填] 模型路径 —— 指向训练好的 ckpt 目录
+# -----------------------------------------------------------------------------
+model_name_or_path: output/cls/checkpoint-best  # 训练产物目录或 HF 模型 id
 
-# 任务
-do_predict: true
+# -----------------------------------------------------------------------------
+# [必填] 数据文件 —— 兼容模式下三个字段都要写
+#   train_file / validation_files 会被实际加载（IO 开销），但 do_train=false / do_eval=false 时不参与计算
+#   常见做法: 让它们指向 test_file 同样的文件，或随便指向一个同结构的 csv
+# -----------------------------------------------------------------------------
+train_file: data/test.csv                   # 兼容写法；predict-only 模式（无此字段）更简洁
+validation_files: data/test.csv             # 兼容写法；predict-only 模式可省略
+test_file: data/test.csv                    # 真正要预测的数据；逗号分隔多文件 → 多测试集输出
+                                            #   例: data/test_a.csv,data/test_b.csv
+                                            #   支持 CSV / JSON / JSONL 格式
 
-# 预测
-per_device_eval_batch_size: 64
-max_seq_length: 128
-cache_dir: ~/workspace/cache  # 留空或 null 则用 HuggingFace 默认路径（~/.cache/huggingface/）
-trust_remote_code: true
+# -----------------------------------------------------------------------------
+# [必填] 文本列与输出目录
+# -----------------------------------------------------------------------------
+text_column_names: sentence                 # 文本列名（必须与训练时一致）
+output_dir: output/cls_predict              # 输出目录：predict_results.csv 写到这里
+
+# -----------------------------------------------------------------------------
+# [必填] 任务控制
+# -----------------------------------------------------------------------------
+do_predict: true                            # 启用预测（必填）
+# do_train / do_eval 默认 false，无需显式写
+
+# -----------------------------------------------------------------------------
+# [常用] 预测超参
+# -----------------------------------------------------------------------------
+per_device_eval_batch_size: 64              # 每 GPU 预测 batch size（仅影响显存和速度）
+max_seq_length: 128                         # ⚠️ 必须与训练时一致；改了会导致预测错位
+
+# -----------------------------------------------------------------------------
+# [可选] 模型加载与缓存
+# -----------------------------------------------------------------------------
+trust_remote_code: true                     # 加载自定义模型代码（Qwen / GLM / GTE 等 remote code 必需）
+cache_dir: ~/workspace/cache                # HF 缓存目录；留空或 null 用默认 ~/.cache/huggingface/

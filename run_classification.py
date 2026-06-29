@@ -29,6 +29,7 @@
 """Finetuning the library models for text classification."""
 # You can also adapt this script on your own text classification task. Pointers for this are left as comments.
 
+import csv
 import logging
 import os
 import random
@@ -206,21 +207,29 @@ class DataTrainingArguments:
 
     def __post_init__(self):
         if self.dataset_name is None:
-            if self.train_file is None or self.validation_files is None:
-                raise ValueError("Need either a training/validation file or a dataset name.")
-
-            train_extension = self.train_file.split(".")[-1]
-            if train_extension not in ["csv", "json"]:
-                raise ValueError("`train_file` should be a csv or a json file.")
-            for val_file in self.validation_files.split(","):
-                val_file = val_file.strip()
-                if not val_file:
-                    raise ValueError("Empty path found in --validation_files.")
-                validation_extension = val_file.split(".")[-1]
-                if validation_extension != train_extension:
-                    raise ValueError(
-                        f"`validation_files` entry '{val_file}' should have the same extension (csv or json) as `train_file`."
-                    )
+            # 必须有 train_file 或 test_file 之一（test_file 单独可走 predict-only 路径）
+            if self.train_file is None and self.test_file is None:
+                raise ValueError(
+                    "Need a train_file, a test_file (predict-only), or a dataset name."
+                )
+            # 扩展名从可用的文件推断（train_file 优先，回落 test_file）
+            ext_src = self.train_file or self.test_file
+            ext = ext_src.split(".")[-1]
+            if ext not in ["csv", "json"]:
+                raise ValueError(
+                    f"Data file should be a csv or json file, got '.{ext}'."
+                )
+            # train_file + validation_files 链路保留原有严格校验（predict-only 路径无 validation_files）
+            if self.train_file is not None and self.validation_files is not None:
+                for val_file in self.validation_files.split(","):
+                    val_file = val_file.strip()
+                    if not val_file:
+                        raise ValueError("Empty path found in --validation_files.")
+                    validation_extension = val_file.split(".")[-1]
+                    if validation_extension != ext:
+                        raise ValueError(
+                            f"`validation_files` entry '{val_file}' should have the same extension (csv or json) as `train_file`."
+                        )
 
 
 @dataclass
@@ -357,19 +366,33 @@ def main():
         logger.info(raw_datasets)
     else:
         # Loading a dataset from your local files.
-        # CSV/JSON training and evaluation files are needed.
-        data_files = {"train": data_args.train_file}
+        # predict-only 模式（do_predict=true 且无 train_file）跳过 train/validation 加载，
+        # label 信息从 model.config.label2id 读取，test_file 可不带 label 列。
+        predict_only = (
+            training_args.do_predict
+            and not training_args.do_train
+            and not training_args.do_eval
+            and data_args.train_file is None
+        )
+
+        # 扩展名从可用的文件推断（train_file 优先，回落 test_file）
+        is_csv = (data_args.train_file or data_args.test_file).endswith(".csv")
+        expected_ext = "csv" if is_csv else "json"
+
+        # 构建 data_files：predict-only 时不加 train split
+        data_files = {}
+        if not predict_only:
+            data_files["train"] = data_args.train_file
 
         # Get the test dataset: you can provide your own CSV/JSON test file(s)
         if training_args.do_predict:
             if data_args.test_file is not None:
                 test_files_list = [f.strip() for f in data_args.test_file.split(",") if f.strip()]
-                train_extension = data_args.train_file.split(".")[-1]
                 for tf in test_files_list:
                     test_extension = tf.split(".")[-1]
-                    if test_extension != train_extension:
+                    if test_extension != expected_ext:
                         raise ValueError(
-                            f"`test_file` entry '{tf}' should have the same extension (csv or json) as `train_file`."
+                            f"`test_file` entry '{tf}' should have the same extension ({expected_ext}) as the source file."
                         )
                 if len(test_files_list) == 1:
                     data_files["test"] = test_files_list[0]
@@ -380,45 +403,35 @@ def main():
         for key in data_files:
             logger.info(f"load a local file for {key}: {data_files[key]}")
 
-        if data_args.train_file.endswith(".csv"):
-            # Loading a dataset from local csv files
-            raw_datasets = load_dataset(
-                "csv",
-                data_files=data_files,
-                cache_dir=model_args.cache_dir,
-                token=model_args.token,
-            )
-        else:
-            # Loading a dataset from local json files
-            raw_datasets = load_dataset(
-                "json",
-                data_files=data_files,
-                cache_dir=model_args.cache_dir,
-                token=model_args.token,
-            )
+        # Loading a dataset from local csv/json files (单次加载 train + 单 test split)
+        raw_datasets = load_dataset(
+            "csv" if is_csv else "json",
+            data_files=data_files,
+            cache_dir=model_args.cache_dir,
+            token=model_args.token,
+        )
 
-        # Load multiple validation files into separate splits
-        validation_files_list = [f.strip() for f in data_args.validation_files.split(",") if f.strip()]
-        if not validation_files_list:
-            raise ValueError("`validation_files` must contain at least one non-empty file path.")
-        is_csv = data_args.train_file.endswith(".csv")
-        if len(validation_files_list) == 1:
-            # Single validation file: load as "validation" split (backward compatible)
-            val_datasets = _load_dataset(validation_files_list[0], is_csv, model_args.cache_dir, model_args.token)
-            raw_datasets["validation"] = val_datasets["validation"]
-            logger.info(f"Loaded validation file '{validation_files_list[0]}' as split 'validation'")
-        else:
-            # Multiple validation files: load each as "validation_N"
-            for i, val_file in enumerate(validation_files_list):
-                val_datasets = _load_dataset(val_file, is_csv, model_args.cache_dir, model_args.token)
-                raw_datasets[f"validation_{i}"] = val_datasets["validation"]
-                logger.info(f"Loaded validation file '{val_file}' as split 'validation_{i}'")
+        # Load multiple validation files into separate splits（predict-only 路径跳过）
+        if not predict_only:
+            validation_files_list = [f.strip() for f in data_args.validation_files.split(",") if f.strip()]
+            if not validation_files_list:
+                raise ValueError("`validation_files` must contain at least one non-empty file path.")
+            if len(validation_files_list) == 1:
+                # Single validation file: load as "validation" split (backward compatible)
+                val_datasets = _load_dataset(validation_files_list[0], is_csv, model_args.cache_dir, model_args.token)
+                raw_datasets["validation"] = val_datasets["validation"]
+                logger.info(f"Loaded validation file '{validation_files_list[0]}' as split 'validation'")
+            else:
+                # Multiple validation files: load each as "validation_N"
+                for i, val_file in enumerate(validation_files_list):
+                    val_datasets = _load_dataset(val_file, is_csv, model_args.cache_dir, model_args.token)
+                    raw_datasets[f"validation_{i}"] = val_datasets["validation"]
+                    logger.info(f"Loaded validation file '{val_file}' as split 'validation_{i}'")
 
         # Load multiple test files into separate splits (if more than one)
         if training_args.do_predict and data_args.test_file is not None:
             test_files_list = [f.strip() for f in data_args.test_file.split(",") if f.strip()]
             if len(test_files_list) > 1:
-                is_csv = data_args.train_file.endswith(".csv")
                 for i, tf in enumerate(test_files_list):
                     test_ds = _load_dataset(tf, is_csv, model_args.cache_dir, model_args.token)
                     raw_datasets[f"test_{i}"] = test_ds["validation"]
@@ -455,76 +468,107 @@ def main():
 
     if data_args.label_column_name is not None and data_args.label_column_name != "label":
         for key in raw_datasets:
-            raw_datasets[key] = raw_datasets[key].rename_column(data_args.label_column_name, "label")
+            # 容错: predict-only 或某些 split 缺 label 列时跳过 rename（避免 ValueError）
+            if data_args.label_column_name in raw_datasets[key].features:
+                raw_datasets[key] = raw_datasets[key].rename_column(data_args.label_column_name, "label")
 
     # Trying to have good defaults here, don't hesitate to tweak to your needs.
-
-    is_regression = data_args.do_regression is True
-
-    is_multi_label = False
-    if is_regression:
-        label_list = None
-        num_labels = 1
-        # regression requires float as label type, let's cast it if needed
-        for split in raw_datasets:
-            if raw_datasets[split].features["label"].dtype not in ["float32", "float64"]:
-                logger.warning(
-                    f"Label type for {split} set to float32, was {raw_datasets[split].features['label'].dtype}"
-                )
-                features = raw_datasets[split].features
-                features.update({"label": Value("float32")})
-                try:
-                    raw_datasets[split] = raw_datasets[split].cast(features)
-                except TypeError as error:
-                    logger.error(
-                        f"Unable to cast {split} set to float32, please check the labels are correct, or maybe try with --do_regression=False"
-                    )
-                    raise error
-
-    else:  # classification
-        _label_feature = raw_datasets["train"].features["label"]
-        _is_list_label = isinstance(_label_feature, Sequence)
-        # Cast float labels to int for classification (e.g., 0.0/1.0 -> 0/1)
-        if not _is_list_label and getattr(_label_feature, "dtype", None) in ["float32", "float64"]:
-            logger.info("Label dtype is float, casting to int32 for classification.")
-            features = raw_datasets["train"].features.copy()
-            features.update({"label": Value("int32")})
-            for split in raw_datasets:
-                if "label" in raw_datasets[split].features:
-                    raw_datasets[split] = raw_datasets[split].cast(features)
-
-        if _is_list_label:  # multi-label classification
-            is_multi_label = True
-            logger.info("Label type is list, doing multi-label classification")
-        # Trying to find the number of labels in a multi-label classification task
-        # We have to deal with common cases that labels appear in the training set but not in the validation/test set.
-        # So we build the label list from the union of labels in train/val/test.
-        label_list = get_label_list(raw_datasets, split="train")
-        for split in raw_datasets:
-            if split.startswith("validation") or split == "test":
-                val_or_test_labels = get_label_list(raw_datasets, split=split)
-                diff = set(val_or_test_labels).difference(set(label_list))
-                if len(diff) > 0:
-                    # add the labels that appear in val/test but not in train, throw a warning
-                    logger.warning(
-                        f"Labels {diff} in {split} set but not in training set, adding them to the label list"
-                    )
-                    label_list += list(diff)
-        # if label is -1, we throw a warning and remove it from the label list
-        for label in label_list:
-            if label == "-1":
-                logger.warning("Label -1 found in label list, removing it.")
-                label_list.remove(label)
-
-        label_list.sort()
+    # predict-only 路径：label 信息直接从 model.config 读取，跳过数据驱动 label 发现。
+    # test_file 可不带 label 列；config.label2id / problem_type 在训练时已写入 config.json。
+    _config_preloaded = None
+    if predict_only:
+        _config_preloaded = AutoConfig.from_pretrained(
+            model_args.config_name if model_args.config_name else model_args.model_name_or_path,
+            cache_dir=model_args.cache_dir,
+            revision=model_args.model_revision,
+            token=model_args.token,
+            trust_remote_code=model_args.trust_remote_code,
+        )
+        label2id = _config_preloaded.label2id or {}
+        if not label2id:
+            raise ValueError(
+                "predict-only 模式要求 model.config 含 label2id；"
+                "请确认 model_name_or_path 指向含 config.json 的训练产物目录。"
+            )
+        label_list = sorted(str(k) for k in label2id.keys())
         num_labels = len(label_list)
         if num_labels <= 1:
             raise ValueError("You need more than one label to do classification.")
+        is_regression = (_config_preloaded.problem_type == "regression")
+        is_multi_label = (_config_preloaded.problem_type == "multi_label_classification")
+        logger.info(
+            f"predict-only: loaded {num_labels} labels from model.config.label2id "
+            f"(problem_type={_config_preloaded.problem_type})"
+        )
+
+    else:
+        is_regression = data_args.do_regression is True
+
+        is_multi_label = False
+        if is_regression:
+            label_list = None
+            num_labels = 1
+            # regression requires float as label type, let's cast it if needed
+            for split in raw_datasets:
+                if raw_datasets[split].features["label"].dtype not in ["float32", "float64"]:
+                    logger.warning(
+                        f"Label type for {split} set to float32, was {raw_datasets[split].features['label'].dtype}"
+                    )
+                    features = raw_datasets[split].features
+                    features.update({"label": Value("float32")})
+                    try:
+                        raw_datasets[split] = raw_datasets[split].cast(features)
+                    except TypeError as error:
+                        logger.error(
+                            f"Unable to cast {split} set to float32, please check the labels are correct, or maybe try with --do_regression=False"
+                        )
+                        raise error
+
+        else:  # classification
+            _label_feature = raw_datasets["train"].features["label"]
+            _is_list_label = isinstance(_label_feature, Sequence)
+            # Cast float labels to int for classification (e.g., 0.0/1.0 -> 0/1)
+            if not _is_list_label and getattr(_label_feature, "dtype", None) in ["float32", "float64"]:
+                logger.info("Label dtype is float, casting to int32 for classification.")
+                features = raw_datasets["train"].features.copy()
+                features.update({"label": Value("int32")})
+                for split in raw_datasets:
+                    if "label" in raw_datasets[split].features:
+                        raw_datasets[split] = raw_datasets[split].cast(features)
+
+            if _is_list_label:  # multi-label classification
+                is_multi_label = True
+                logger.info("Label type is list, doing multi-label classification")
+            # Trying to find the number of labels in a multi-label classification task
+            # We have to deal with common cases that labels appear in the training set but not in the validation/test set.
+            # So we build the label list from the union of labels in train/val/test.
+            label_list = get_label_list(raw_datasets, split="train")
+            for split in raw_datasets:
+                if split.startswith("validation") or split == "test":
+                    val_or_test_labels = get_label_list(raw_datasets, split=split)
+                    diff = set(val_or_test_labels).difference(set(label_list))
+                    if len(diff) > 0:
+                        # add the labels that appear in val/test but not in train, throw a warning
+                        logger.warning(
+                            f"Labels {diff} in {split} set but not in training set, adding them to the label list"
+                        )
+                        label_list += list(diff)
+            # if label is -1, we throw a warning and remove it from the label list
+            for label in label_list:
+                if label == "-1":
+                    logger.warning("Label -1 found in label list, removing it.")
+                    label_list.remove(label)
+
+            label_list.sort()
+            num_labels = len(label_list)
+            if num_labels <= 1:
+                raise ValueError("You need more than one label to do classification.")
 
     # Load pretrained model and tokenizer
     # In distributed training, the .from_pretrained methods guarantee that only one local process can concurrently
     # download model & vocab.
-    config = AutoConfig.from_pretrained(
+    # predict-only 路径下复用已加载的 _config_preloaded（已含 label2id / problem_type）。
+    config = _config_preloaded or AutoConfig.from_pretrained(
         model_args.config_name if model_args.config_name else model_args.model_name_or_path,
         num_labels=num_labels,
         finetuning_task="text-classification",
@@ -673,10 +717,21 @@ def main():
         return result
 
     # Running the preprocessing pipeline on all the datasets
-    tokenized_cache_dir = os.path.join(datasets.config.HF_DATASETS_CACHE, f"_tokenized_cls_{raw_datasets['train']._fingerprint}")
+    # Cache key mirrors HF's internal mechanism: compute post-map fingerprint
+    # via update_fingerprint (same function .map() uses), so any change in
+    # data files, preprocess_function source, or map kwargs invalidates cache.
+    from datasets.fingerprint import update_fingerprint, Hasher
+
+    map_kwargs = {"batched": True, "num_proc": data_args.preprocessing_num_workers}
+    post_map_fps = [
+        f"{name}:{update_fingerprint(raw_datasets[name]._fingerprint, preprocess_function, map_kwargs)}"
+        for name in sorted(raw_datasets.keys())
+    ]
+    cache_fp = Hasher.hash(post_map_fps)
+    tokenized_cache_dir = os.path.join(datasets.config.HF_DATASETS_CACHE, f"_tokenized_cls_{cache_fp}")
     with training_args.main_process_first(desc="dataset map pre-processing"):
         from datasets import load_from_disk
-        if os.path.exists(tokenized_cache_dir):
+        if os.path.exists(tokenized_cache_dir) and not data_args.overwrite_cache:
             raw_datasets = load_from_disk(tokenized_cache_dir)
             logger.info(f"Loaded tokenized datasets from cache: {tokenized_cache_dir}")
         elif training_args.process_index == 0:
@@ -761,13 +816,21 @@ def main():
     logger.info(f"Using metric '{metric_name}' for evaluation.")
 
     if training_args.metric_for_best_model is not None:
-        expected_prefix = f"eval_{metric_name}"
         best_metric = training_args.metric_for_best_model
-        # auc/ks 会额外输出 per-label 指标如 eval_auc_xxx，所以也允许前缀匹配
-        if best_metric != expected_prefix and not best_metric.startswith(expected_prefix + "_"):
+        # 合法格式:
+        #   单验证集:     eval_accuracy, eval_auc
+        #   多验证集:     eval_validation_0_accuracy, eval_validation_1_auc
+        #   per-label:    eval_auc_label_name, eval_ks_label_name
+        #   多验证集+per-label: eval_validation_0_auc_label
+        valid = (
+            best_metric == f"eval_{metric_name}"
+            or best_metric.endswith(f"_{metric_name}")
+            or f"_{metric_name}_" in best_metric
+        )
+        if not valid:
             raise ValueError(
                 f"metric_for_best_model='{best_metric}' 与 metric_name='{metric_name}' 不匹配。"
-                f"预期以 '{expected_prefix}' 开头，请检查配置。"
+                f"预期格式为 eval_{metric_name}、eval_validation_{{N}}_{metric_name} 或 eval_{metric_name}_{{label}}。"
             )
 
     def compute_metrics(p: EvalPrediction):
@@ -885,8 +948,9 @@ def main():
 
     if training_args.do_predict:
         logger.info("*** Predict ***")
-        # Determine columns to exclude from output: text columns + label
-        exclude_cols = {"label"}
+        # Determine columns to exclude from output: text columns + label + 内部 sentence 字段
+        # preprocess_function 会把 text_column_names 内容拷到内部 "sentence" 列，需一并排除
+        exclude_cols = {"label", "sentence"}
         if data_args.text_column_names is not None:
             exclude_cols.update(c.strip() for c in data_args.text_column_names.split(","))
         if data_args.remove_columns is not None:
@@ -918,28 +982,28 @@ def main():
                     predictions = probs[:, 1]
                 else:
                     predictions = np.argmax(raw_predictions, axis=1)
-            # Output filename: single test -> predict_results.txt, multiple -> predict_results_N.txt
+            # Output filename: single test -> predict_results.csv, multiple -> predict_results_test_N.csv
             if len(predict_datasets) == 1:
-                output_predict_file = os.path.join(training_args.output_dir, "predict_results.txt")
+                output_predict_file = os.path.join(training_args.output_dir, "predict_results.csv")
             else:
-                output_predict_file = os.path.join(training_args.output_dir, f"predict_results_{split_name}.txt")
+                output_predict_file = os.path.join(training_args.output_dir, f"predict_results_{split_name}.csv")
             if trainer.is_world_process_zero():
-                with open(output_predict_file, "w") as writer:
+                with open(output_predict_file, "w", newline="") as f:
                     logger.info(f"***** Predict results for {split_name} *****")
-                    header = "\t".join(keep_cols + ["prediction"])
-                    writer.write(header + "\n")
+                    writer = csv.writer(f)
+                    writer.writerow(keep_cols + ["prediction"])
                     for index, item in enumerate(predictions):
-                        cols = [str(rows[index][c]) for c in keep_cols]
+                        row = [rows[index][c] for c in keep_cols]
                         if is_regression:
-                            cols.append(f"{item:3.3f}")
+                            row.append(f"{item:3.3f}")
                         elif is_multi_label:
                             probs = {label_list[i]: f"{item[i]:.6f}" for i in range(len(item))}
-                            cols.append(str(probs))
+                            row.append(str(probs))
                         elif raw_predictions.shape[1] == 2:
-                            cols.append(f"{item:.6f}")
+                            row.append(f"{item:.6f}")
                         else:
-                            cols.append(label_list[item])
-                        writer.write("\t".join(cols) + "\n")
+                            row.append(label_list[item])
+                        writer.writerow(row)
             logger.info(f"Predict results saved at {output_predict_file}")
     kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "text-classification"}
 

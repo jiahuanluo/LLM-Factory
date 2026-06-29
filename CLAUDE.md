@@ -215,8 +215,9 @@ bf16: false  # A100/H100 推荐
 
 - 任务类型自动推断：label 列为 float → 回归（MSE），为 list → 多标签（F1 micro），其他 → 单标签（默认 accuracy，支持 auc/ks）
 - 多验证集：`--validation_files` 接受逗号分隔路径，单个文件加载为 `"validation"` split，多个加载为 `"validation_0"`, `"validation_1"` ... Trainer 对每个 key 分别评估
-- 多测试集：`--test_file` 同样支持逗号分隔，单个输出 `predict_results.txt`，多个输出 `predict_results_test_0.txt`, `predict_results_test_1.txt` ...
+- 多测试集：`--test_file` 同样支持逗号分隔，单个输出 `predict_results.csv`（CSV 格式，逗号分隔，含逗号字段自动加引号转义），多个输出 `predict_results_test_0.csv`, `predict_results_test_1.csv` ...
 - label 发现：从 train + 所有 validation/test split 合并 label list，防止 val 出现 train 未见的标签
+- predict-only 模式：`do_predict=true` 且 `do_train=false` 且 `do_eval=false` 且未设 `train_file` 时自动启用，跳过 train/validation 加载，label 直接从 `model.config.label2id` 读取，test_file 可不带 label 列
 - 预测输出保留原始数据所有非文本列，附加 `prediction` 列（二分类为正类概率，多分类为标签名，多标签为各标签 sigmoid 概率，回归为预测值）
 
 ### run_mlm.py
@@ -285,6 +286,20 @@ token: "your-hf-token"
 
 训练前自动检查 tokenizer 与数据匹配度。报错说明 tokenizer 与数据语言不匹配（例如用英文 tokenizer 处理中文数据）。请更换匹配语言的 tokenizer。
 
+### 预测时是否需要 train_file / validation_files？
+
+**不需要**（predict-only 模式）。当满足以下条件时自动进入 predict-only 路径：
+
+- `do_predict: true` 且 `do_train: false` 且 `do_eval: false`
+- 未设置 `train_file`
+
+此时：
+- 跳过 train/validation 文件加载（避免不必要的 IO）
+- label 信息直接从 `model.config.label2id` 读取（训练时已写入 ckpt 的 `config.json`）
+- `test_file` 可不带 label 列
+
+参考最小配置：`configs/predict_only.yaml`。如果使用旧版 `configs/predict_cls.yaml`（含 `train_file`），仍按兼容路径加载，但会多读两个文件。
+
 ## 故障排查
 
 | 症状 | 排查方向 |
@@ -296,7 +311,7 @@ token: "your-hf-token"
 | YAML 参数未生效 | CLI 参数优先级高于 YAML；检查是否有同名 CLI 覆盖 |
 | 路径无法解析 | 检查是否使用 `~` / `$ENV_VAR` / 相对路径；`read_args()` 支持自动展开 |
 | label 未见报错 | label 列表从 train + 所有 val/test split 合并发现，防止 val 出现 train 未见标签 |
-| 多测试集输出位置 | 单测试集 → `predict_results.txt`；多测试集 → `predict_results_test_0.txt`、`predict_results_test_1.txt` ... |
+| 多测试集输出位置 | 单测试集 → `predict_results.csv`（CSV 逗号分隔）；多测试集 → `predict_results_test_0.csv`、`predict_results_test_1.csv` ... |
 
 ## 常见错误
 
