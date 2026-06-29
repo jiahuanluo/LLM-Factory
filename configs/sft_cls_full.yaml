@@ -1,0 +1,183 @@
+# =============================================================================
+# 文本分类训练配置（完整版 — 覆盖所有参数维度，对齐 sft.sh 生产参数）
+#
+# 与 configs/example_cls.yaml 的区别:
+#   - 本配置在 example 的基础上补充了 scripts/sft.sh 实际生产使用的字段
+#   - 标注 "sft.sh" 的值为 8 卡分布式训练的生产参数，单卡调试可按需调整
+#   - 标注 "4.x" 的字段在 transformers 5.x 已移除/改默认，已转注释
+#
+# 用法:
+#   python run_classification.py configs/sft_cls_full.yaml
+#   python run_classification.py configs/sft_cls_full.yaml --learning_rate 1e-4  # CLI 覆盖
+#   torchrun --nproc_per_node 8 run_classification.py configs/sft_cls_full.yaml  # 多卡
+#
+# 必填参数: model_name_or_path, train_file, validation_files, text_column_names, output_dir
+#
+# 版本兼容:
+#   - transformers 5.x 移除了 overwrite_output_dir / save_safetensors，相关项已改为注释
+#   - warmup_ratio / logging_dir 在 5.x 触发 deprecation，5.2 起改用 warmup_steps / TENSORBOARD_LOGGING_DIR
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# [必填] 模型路径 —— 预训练模型的本地路径或 HuggingFace 模型 ID
+# -----------------------------------------------------------------------------
+model_name_or_path: bert-base-uncased      # 占位示例；生产环境替换为本地模型目录或 HF id
+config_name: null                           # 单独指定模型 config（默认同 model_name_or_path）
+                                            #   GTE 新旧架构切换、随机初始化实验时使用
+tokenizer_name: null                        # 单独指定 tokenizer（默认同 model_name_or_path）
+cache_dir: ~/workspace/cache                # HF 缓存目录；留空或 null 用默认 ~/.cache/huggingface/
+
+# -----------------------------------------------------------------------------
+# [必填] 数据文件 —— 支持 CSV 和 JSON（JSONL）格式
+# -----------------------------------------------------------------------------
+train_file: data/train.csv                  # 训练集
+validation_files: data/val.csv              # 验证集，逗号分隔多文件 → 加载为 validation_0 / validation_1 ...
+                                            #   单文件 → 加载为 validation split
+test_file: data/test.csv                    # 测试集（do_predict=true 时使用），逗号分隔多文件
+                                            #   单文件输出 predict_results.csv；多文件输出 predict_results_test_0.csv ...
+
+# -----------------------------------------------------------------------------
+# [必填] 文本列与输出目录
+# -----------------------------------------------------------------------------
+text_column_names: sentence                 # 文本列名，多列用逗号拼接（如 title,content）
+text_column_delimiter: "\n\n"               # 多文本列拼接的分隔符（默认空格 " "；分类任务常用 \n\n）
+label_column_name: label                    # 标签列名（不指定时默认 "label"）
+                                            #   int → 单标签分类；float → 回归；list → 多标签分类
+output_dir: output/cls_full                 # 输出目录：checkpoint + 日志 + 预测结果都写到这里
+
+# -----------------------------------------------------------------------------
+# [常用] 任务控制 —— 用 do_* 组合决定走哪条路径
+# -----------------------------------------------------------------------------
+do_train: true                              # 训练
+do_eval: true                               # 评估（每个 eval_steps / 每个 epoch 后在验证集上评估）
+do_predict: false                           # 预测（对 test_file 输出预测结果）
+do_regression: false                        # 显式回归；false 时由 label 列类型自动推断
+
+# -----------------------------------------------------------------------------
+# [常用] 训练超参 —— 最常调整的几个参数
+# -----------------------------------------------------------------------------
+learning_rate: 2e-5                         # 学习率；sft.sh 网格搜索 4 个值: 1e-5 / 5e-6 / 5e-5 / 2e-5
+num_train_epochs: 3                         # 训练轮数；sft.sh 用 3
+per_device_train_batch_size: 32             # 每 GPU 训练 batch size（注意是 per-device，不是总 batch）
+per_device_eval_batch_size: 128             # 每 GPU 评估 batch size（sft.sh 用 128）
+max_seq_length: 128                         # 最大序列长度（token 数），超长截断，短的补齐
+metric_name: auc                            # 评估指标: accuracy / auc / ks / f1 / mse
+                                            #   auc 时自动同时计算 ks；f1 用于多标签；mse 用于回归
+
+# -----------------------------------------------------------------------------
+# [常用] batch size 三要素 —— 显存不够时调这里
+# 关键公式（参考 scripts/sft.sh）:
+#   effective_batch_size = per_device_train_batch_size × gradient_accumulation_steps × world_size
+#   world_size = torchrun --nproc_per_node 指定的 GPU 数（单卡 = 1）
+# 反推 accumulation:
+#   gradient_accumulation_steps = effective_batch_size / world_size / per_device_train_batch_size
+# 显存不够时: 减小 per_device_train_batch_size，同步增大 gradient_accumulation_steps，
+#            保持 effective_batch_size 不变 → 梯度更新等价，只是变慢。
+# 生产参考（sft.sh，8 卡）:
+#   effective_batch_size = 1024 / 2048 / 512 三档，由 shell 变量 bs 控制
+#   例: bs=1024, per_device=4 → accumulation = 1024/8/4 = 32
+#   例: bs=2048, per_device=8 → accumulation = 2048/8/8 = 32
+# -----------------------------------------------------------------------------
+gradient_accumulation_steps: 1              # 累积 N 步再更新；和 per_device × world_size 相乘 = effective batch
+
+# -----------------------------------------------------------------------------
+# [可选] 数据采样 —— 调试用，快速验证流程
+# -----------------------------------------------------------------------------
+max_train_samples: null                     # 最大训练样本数（null=使用全部；sft.sh 用 1e8 等价全部）
+max_eval_samples: null                      # 最大验证样本数（null=使用全部）
+
+# -----------------------------------------------------------------------------
+# [可选] 数据处理
+# -----------------------------------------------------------------------------
+preprocessing_num_workers: 40               # tokenize 并行进程数（sft.sh 用 40 充分利用 CPU；null=单进程）
+overwrite_cache: false                      # 是否强制重建预处理缓存
+pad_to_max_length: true                     # true=固定长度填充（推荐）；false=动态 padding（按 batch 最长，省内存）
+shuffle_train_dataset: true                 # 是否打乱训练集（sft.sh 启用）
+
+# -----------------------------------------------------------------------------
+# [可选] 优化器
+# -----------------------------------------------------------------------------
+optim: adamw_torch                          # adamw_torch / adamw_torch_fused / adamw_8bit / paged_adamw_8bit
+                                            #   fused 在 CUDA 11+ 推荐；8bit 省显存（需 bitsandbytes）
+weight_decay: 0.01                          # 权重衰减（L2 正则）
+max_grad_norm: 1.0                          # 梯度裁剪阈值（防止梯度爆炸）
+label_smoothing_factor: 0.0                 # 标签平滑系数（0.0=关闭；分类任务可调 0.1）
+
+# -----------------------------------------------------------------------------
+# [可选] 学习率调度
+# -----------------------------------------------------------------------------
+lr_scheduler_type: cosine                   # linear / cosine / cosine_with_restarts / polynomial / constant / constant_with_warmup
+warmup_ratio: 0.1                           # warmup 步数占总步数比例（与 warmup_steps 二选一）
+                                            #   ⚠️ 5.x deprecated，5.2 起改用 warmup_steps
+warmup_steps: 0                             # warmup 步数（优先于 warmup_ratio）
+
+# -----------------------------------------------------------------------------
+# [可选] 评估与 Checkpoint 策略 —— sft.sh 用 steps（按步评估/保存）
+#   评估/保存频率公式: 100 * 2048 / effective_batch_size
+#   单卡默认 500 步方便观察；生产按公式计算（bs=1024 → 200 步）
+# -----------------------------------------------------------------------------
+eval_strategy: steps                        # 评估策略: no / steps（每 N 步）/ epoch（每 epoch）
+save_strategy: steps                        # 保存策略: no / steps / epoch
+eval_steps: 500                             # 每 N 步评估一次（eval_strategy=steps 时生效）
+save_steps: 500                             # 每 N 步保存一次（save_strategy=steps 时生效）
+eval_delay: 500                             # 首次评估延迟步数（sft.sh 设为 = eval_steps，避免过早评估）
+save_only_model: true                       # 只存权重不存 optimizer/scheduler 状态（sft.sh 启用，省盘）
+                                            #   ⚠️ 需 resume 训练时设 false
+save_total_limit: 3                         # 最多保留 checkpoint 数量（sft.sh 用 3）
+load_best_model_at_end: true                # 训练结束加载最优 checkpoint（需配合 metric_for_best_model）
+metric_for_best_model: eval_auc             # 判断最优的指标；多验证集需带 split（如 eval_validation_0_auc）
+greater_is_better: true                     # 指标越大越好（accuracy/auc=true，loss/mse=false）
+resume_from_checkpoint: null                # 从指定 checkpoint 恢复；null 时自动从 output_dir 最新 ckpt 恢复
+
+# 4.x 兼容字段（5.x 已移除或改默认，留作注释参考）:
+# save_safetensors: false                    # 4.x 字段，sft.sh 显式关闭；5.x 默认 safetensors 不可关闭
+# overwrite_output_dir: true                 # 4.x 字段；5.x 默认就覆盖输出目录
+
+# -----------------------------------------------------------------------------
+# [可选] 混合精度训练 —— 显著加速，需 GPU 支持
+#   fp16 与 bf16 互斥，只能开一个；都不开则用 fp32
+#   sft.sh 在 GPU 路径开 fp16；NPU（昇腾）路径不开，由 modeling_hw.py 适配
+# -----------------------------------------------------------------------------
+fp16: true                                  # FP16 混合精度（V100 仅支持 fp16；sft.sh 启用）
+bf16: false                                 # BF16 混合精度（A100/H100 推荐，数值范围比 fp16 大）
+
+# -----------------------------------------------------------------------------
+# [可选] 性能 / DataLoader
+# -----------------------------------------------------------------------------
+gradient_checkpointing: false               # 大模型省显存（trade-off: 速度慢约 20%）
+dataloader_num_workers: 4                   # DataLoader 进程数
+                                            #   与 preprocessing_num_workers 区别: 前者管训练时取 batch，后者管 tokenize
+
+# -----------------------------------------------------------------------------
+# [可选] 分布式训练 / 正则化 —— sft.sh 多卡训练相关
+# -----------------------------------------------------------------------------
+ddp_find_unused_parameters: false           # 多卡训练关闭未用参数检测（sft.sh 显式 False，提速）
+ddp_timeout: 18000000                       # 多卡训练超时秒数（sft.sh = 18000000 ≈ 5 小时，长任务防中断）
+neftune_noise_alpha: 0.2                    # NEFTune: 对 embedding 添加均匀噪声做正则（sft.sh 已修正 typo neptune→neftune）
+                                            #   典型值 0.1 ~ 0.5；无需正则设 0.0 或 null
+
+# -----------------------------------------------------------------------------
+# [可选] 模型加载与结构
+# -----------------------------------------------------------------------------
+ignore_mismatched_sizes: true               # 改了分类头维度时必须开启（避免加载时报错）
+trust_remote_code: true                     # 加载自定义模型代码（Qwen / GLM / GTE 等 remote code 必需）
+use_fast_tokenizer: true                    # 推荐 true（Rust 实现，速度快）
+model_revision: main                        # HF 模型版本（可指定 commit hash 精确锁定）
+token: null                                 # 私有模型 token；建议用环境变量 HF_TOKEN，不要写死
+
+# -----------------------------------------------------------------------------
+# [可选] 日志配置
+# -----------------------------------------------------------------------------
+logging_dir: output/cls_full/logs           # TensorBoard 日志目录
+                                            #   ⚠️ 5.x deprecated，5.2 起改用环境变量 TENSORBOARD_LOGGING_DIR
+logging_strategy: steps                     # 日志策略: no / steps / epoch
+logging_steps: 10                           # 每 N 步记录一次 loss（sft.sh 用 10）
+report_to: tensorboard                      # none / tensorboard / wandb / all
+disable_tqdm: false                         # 是否禁用进度条（分布式日志干净可设 true）
+
+# -----------------------------------------------------------------------------
+# [可选] 可复现性
+# -----------------------------------------------------------------------------
+seed: 42                                    # 随机种子（sft.sh 由 shell 传入）
+data_seed: 42                               # 数据采样种子（不指定时同 seed）
+full_determinism: false                     # 严格可复现（会变慢，调试用；CUDA 默认非确定性）
