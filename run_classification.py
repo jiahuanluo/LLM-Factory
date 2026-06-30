@@ -301,6 +301,16 @@ def get_label_list(raw_dataset, split="train") -> list[str]:
     return label_list
 
 
+def multi_labels_to_ids(labels: list[str], label_to_id: dict) -> list[float]:
+    """Multi-label → multi-hot float vector (BCELoss target). 模块级定义，
+    避免作为 main() 嵌套 closure 被 preprocess_function 引用时触发 dill 嵌套
+    closure pickle 的非确定性，导致多卡 tokenize cache 跨 rank hash 不一致。"""
+    ids = [0.0] * len(label_to_id)
+    for label in labels:
+        ids[label_to_id[str(label)]] = 1.0
+    return ids
+
+
 def _load_dataset(filepath, is_csv, cache_dir, token):
     fmt = "csv" if is_csv else "json"
     return load_dataset(fmt, data_files={"validation": filepath}, cache_dir=cache_dir, token=token)
@@ -694,12 +704,6 @@ def main():
         )
     max_seq_length = min(data_args.max_seq_length, tokenizer.model_max_length)
 
-    def multi_labels_to_ids(labels: list[str]) -> list[float]:
-        ids = [0.0] * len(label_to_id)  # BCELoss requires float as target type
-        for label in labels:
-            ids[label_to_id[str(label)]] = 1.0
-        return ids
-
     def preprocess_function(examples):
         if data_args.text_column_names is not None:
             text_column_names = data_args.text_column_names.split(",")
@@ -712,7 +716,7 @@ def main():
         result = tokenizer(examples["sentence"], padding=padding, max_length=max_seq_length, truncation=True)
         if label_to_id is not None and "label" in examples:
             if is_multi_label:
-                result["label"] = [multi_labels_to_ids(l) for l in examples["label"]]
+                result["label"] = [multi_labels_to_ids(l, label_to_id) for l in examples["label"]]
             else:
                 mapped_labels = []
                 for l in examples["label"]:
@@ -728,73 +732,22 @@ def main():
                 result["label"] = mapped_labels
         return result
 
-    # Running the preprocessing pipeline on all the datasets
-    # Cache key mirrors HF's internal mechanism: compute post-map fingerprint
-    # via update_fingerprint (same function .map() uses), so any change in
-    # data files, preprocess_function source, or map kwargs invalidates cache.
-    from datasets.fingerprint import update_fingerprint, Hasher
-
-    map_kwargs = {"batched": True, "num_proc": data_args.preprocessing_num_workers}
-    post_map_fps = [
-        f"{name}:{update_fingerprint(raw_datasets[name]._fingerprint, preprocess_function, map_kwargs)}"
-        for name in sorted(raw_datasets.keys())
-    ]
-    cache_fp = Hasher.hash(post_map_fps)
-    tokenized_cache_dir_mine = os.path.join(datasets.config.HF_DATASETS_CACHE, f"_tokenized_cls_{cache_fp}")
-    logger.warning(
-        f"[HASH-DEBUG rank {training_args.process_index}] "
-        f"cache_fp={cache_fp} "
-        f"splits={sorted(raw_datasets.keys())} "
-        f"per_split_fp={[(n, raw_datasets[n]._fingerprint) for n in sorted(raw_datasets.keys())]} "
-        f"post_map_fps={post_map_fps} "
-        f"map_kwargs={map_kwargs}"
-    )
-    # 多卡场景下 cache_fp 跨 rank 可能不一致（hash 算法依赖 closure pickle，
-    # 部分环境下非确定）。为保证所有 rank 共享 rank0 tokenize 一次的产物，
-    # 用 marker 文件交换 rank0 算出的路径：rank0 写、其他 rank 读。
-    # marker 文件名按输入文件路径哈希，避免同机并发多 run 冲突。
-    import hashlib as _hashlib
-    _run_id_in = "|".join(str(x) for x in [
-        data_args.train_file, data_args.validation_files, data_args.test_file,
-        data_args.text_column_names, data_args.max_seq_length,
-    ])
-    _run_id = _hashlib.sha256(_run_id_in.encode()).hexdigest()[:8]
-    _path_marker = os.path.join(datasets.config.HF_DATASETS_CACHE, f"_cls_rank0_path_{_run_id}.txt")
+    # Running the preprocessing pipeline on all the datasets.
+    # 直接用 HF 默认 .map() + load_from_cache_file：
+    #   - rank0 在 main_process_first 内先跑，写 arrow cache
+    #   - 其他 rank 后跑，命中 cache 直接 load，不再重复 tokenize
+    # 这要求 preprocess_function 跨 rank 的 dill pickle 字节一致 → fingerprint 一致 →
+    # cache 路径一致。multi_labels_to_ids 已提到模块级（不再作为嵌套 closure 被
+    # preprocess_function 引用），preprocess_function 现在是扁平 closure，pickle 跨
+    # rank 确定，HF 默认机制即可工作。
     with training_args.main_process_first(desc="dataset map pre-processing"):
-        from datasets import load_from_disk
-        if training_args.process_index == 0:
-            # rank0：用自己的路径，写 marker 给其他 rank
-            tokenized_cache_dir = tokenized_cache_dir_mine
-            with open(_path_marker, "w") as _f:
-                _f.write(tokenized_cache_dir)
-            if os.path.exists(tokenized_cache_dir) and not data_args.overwrite_cache:
-                raw_datasets = load_from_disk(tokenized_cache_dir)
-                logger.info(f"Loaded tokenized datasets from cache: {tokenized_cache_dir}")
-            else:
-                raw_datasets = raw_datasets.map(
-                    preprocess_function,
-                    batched=True,
-                    num_proc=data_args.preprocessing_num_workers,
-                    load_from_cache_file=not data_args.overwrite_cache,
-                    desc="Running tokenizer on dataset",
-                )
-                raw_datasets.save_to_disk(tokenized_cache_dir)
-                logger.info(f"Tokenized datasets and saved to cache: {tokenized_cache_dir}")
-        else:
-            # 非 rank0：读 rank0 的路径，直接 load（不再重复 tokenize）
-            if not os.path.exists(_path_marker):
-                raise RuntimeError(
-                    f"rank {training_args.process_index}: marker {_path_marker} not found; "
-                    f"rank 0 may have crashed during tokenization"
-                )
-            with open(_path_marker) as _f:
-                tokenized_cache_dir = _f.read().strip()
-            if not os.path.exists(tokenized_cache_dir):
-                raise RuntimeError(
-                    f"rank {training_args.process_index}: rank 0's cache dir {tokenized_cache_dir} not found"
-                )
-            raw_datasets = load_from_disk(tokenized_cache_dir)
-            logger.info(f"Loaded tokenized datasets from cache (rank0 path): {tokenized_cache_dir}")
+        raw_datasets = raw_datasets.map(
+            preprocess_function,
+            batched=True,
+            num_proc=data_args.preprocessing_num_workers,
+            load_from_cache_file=not data_args.overwrite_cache,
+            desc="Running tokenizer on dataset",
+        )
 
     if training_args.do_train:
         if "train" not in raw_datasets:
