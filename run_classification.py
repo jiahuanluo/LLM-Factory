@@ -740,7 +740,7 @@ def main():
         for name in sorted(raw_datasets.keys())
     ]
     cache_fp = Hasher.hash(post_map_fps)
-    tokenized_cache_dir = os.path.join(datasets.config.HF_DATASETS_CACHE, f"_tokenized_cls_{cache_fp}")
+    tokenized_cache_dir_mine = os.path.join(datasets.config.HF_DATASETS_CACHE, f"_tokenized_cls_{cache_fp}")
     logger.warning(
         f"[HASH-DEBUG rank {training_args.process_index}] "
         f"cache_fp={cache_fp} "
@@ -749,37 +749,52 @@ def main():
         f"post_map_fps={post_map_fps} "
         f"map_kwargs={map_kwargs}"
     )
+    # 多卡场景下 cache_fp 跨 rank 可能不一致（hash 算法依赖 closure pickle，
+    # 部分环境下非确定）。为保证所有 rank 共享 rank0 tokenize 一次的产物，
+    # 用 marker 文件交换 rank0 算出的路径：rank0 写、其他 rank 读。
+    # marker 文件名按输入文件路径哈希，避免同机并发多 run 冲突。
+    import hashlib as _hashlib
+    _run_id_in = "|".join(str(x) for x in [
+        data_args.train_file, data_args.validation_files, data_args.test_file,
+        data_args.text_column_names, data_args.max_seq_length,
+    ])
+    _run_id = _hashlib.sha256(_run_id_in.encode()).hexdigest()[:8]
+    _path_marker = os.path.join(datasets.config.HF_DATASETS_CACHE, f"_cls_rank0_path_{_run_id}.txt")
     with training_args.main_process_first(desc="dataset map pre-processing"):
         from datasets import load_from_disk
-        if os.path.exists(tokenized_cache_dir) and not data_args.overwrite_cache:
-            raw_datasets = load_from_disk(tokenized_cache_dir)
-            logger.info(f"Loaded tokenized datasets from cache: {tokenized_cache_dir}")
-        elif training_args.process_index == 0:
-            raw_datasets = raw_datasets.map(
-                preprocess_function,
-                batched=True,
-                num_proc=data_args.preprocessing_num_workers,
-                load_from_cache_file=not data_args.overwrite_cache,
-                desc="Running tokenizer on dataset",
-            )
-            raw_datasets.save_to_disk(tokenized_cache_dir)
-            logger.info(f"Tokenized datasets and saved to cache: {tokenized_cache_dir}")
-        else:
-            try:
+        if training_args.process_index == 0:
+            # rank0：用自己的路径，写 marker 给其他 rank
+            tokenized_cache_dir = tokenized_cache_dir_mine
+            with open(_path_marker, "w") as _f:
+                _f.write(tokenized_cache_dir)
+            if os.path.exists(tokenized_cache_dir) and not data_args.overwrite_cache:
                 raw_datasets = load_from_disk(tokenized_cache_dir)
-                logger.info(f"Loaded tokenized datasets from cache (non-rank-0): {tokenized_cache_dir}")
-            except Exception as e:
-                logger.warning(
-                    f"rank {training_args.process_index}: cache miss at {tokenized_cache_dir} "
-                    f"({type(e).__name__}: {e}); falling back to local .map()"
-                )
+                logger.info(f"Loaded tokenized datasets from cache: {tokenized_cache_dir}")
+            else:
                 raw_datasets = raw_datasets.map(
                     preprocess_function,
                     batched=True,
                     num_proc=data_args.preprocessing_num_workers,
                     load_from_cache_file=not data_args.overwrite_cache,
-                    desc="Running tokenizer on dataset (fallback)",
+                    desc="Running tokenizer on dataset",
                 )
+                raw_datasets.save_to_disk(tokenized_cache_dir)
+                logger.info(f"Tokenized datasets and saved to cache: {tokenized_cache_dir}")
+        else:
+            # 非 rank0：读 rank0 的路径，直接 load（不再重复 tokenize）
+            if not os.path.exists(_path_marker):
+                raise RuntimeError(
+                    f"rank {training_args.process_index}: marker {_path_marker} not found; "
+                    f"rank 0 may have crashed during tokenization"
+                )
+            with open(_path_marker) as _f:
+                tokenized_cache_dir = _f.read().strip()
+            if not os.path.exists(tokenized_cache_dir):
+                raise RuntimeError(
+                    f"rank {training_args.process_index}: rank 0's cache dir {tokenized_cache_dir} not found"
+                )
+            raw_datasets = load_from_disk(tokenized_cache_dir)
+            logger.info(f"Loaded tokenized datasets from cache (rank0 path): {tokenized_cache_dir}")
 
     if training_args.do_train:
         if "train" not in raw_datasets:
