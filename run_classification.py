@@ -339,13 +339,16 @@ def main():
         handlers=log_handlers,
     )
 
-    if training_args.should_log:
-        # The default of training_args.log_level is passive, so we set log level at info here to have that default.
-        transformers.utils.logging.set_verbosity_info()
-
-    log_level = training_args.get_process_log_level()
+    if training_args.process_index == 0:
+        if training_args.should_log:
+            # The default of training_args.log_level is passive, so we set log level at info here to have that default.
+            transformers.utils.logging.set_verbosity_info()
+        log_level = training_args.get_process_log_level()
+    else:
+        # 非 rank0：只显示 ERROR 及以上，屏蔽 INFO/WARNING，减少多卡日志噪音
+        log_level = logging.ERROR
     logger.setLevel(log_level)
-    datasets.utils.logging.set_verbosity(logging.WARNING)
+    datasets.utils.logging.set_verbosity(log_level)
     transformers.utils.logging.set_verbosity(log_level)
     transformers.utils.logging.enable_default_handler()
     transformers.utils.logging.enable_explicit_format()
