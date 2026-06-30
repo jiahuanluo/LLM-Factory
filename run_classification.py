@@ -37,15 +37,6 @@ import sys
 import warnings
 from dataclasses import dataclass, field
 
-# 多卡场景下，非 rank0 在 HF 库 import 之前就用环境变量压低日志级别，
-# 避免 datasets/transformers 库在 import 时配置 logger 后被覆盖。
-# torchrun 启动时设置 RANK 环境变量；单卡运行时 RANK 未设或为 0。
-_rank = int(os.environ.get("RANK", "0"))
-if _rank != 0:
-    os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
-    os.environ.setdefault("DATASETS_VERBOSITY", "error")
-    warnings.filterwarnings("ignore")
-
 import datasets
 import numpy as np
 import scipy.special
@@ -357,8 +348,12 @@ def main():
     else:
         # 非 rank0：只显示 ERROR 及以上，屏蔽 INFO/WARNING，减少多卡日志噪音
         log_level = logging.ERROR
+        # 同时屏蔽 Python 原生 warning（UserWarning、FutureWarning 等）
+        warnings.filterwarnings("ignore")
     logger.setLevel(log_level)
-    datasets.utils.logging.set_verbosity(log_level)
+    # datasets 固定 WARNING(30)：屏蔽 INFO 噪音（"Found cached dataset" 等），
+    # 保留 WARNING 及以上（实际 datasets 几乎不发 WARNING，等价于静默 INFO）
+    datasets.utils.logging.set_verbosity(30)
     transformers.utils.logging.set_verbosity(log_level)
     transformers.utils.logging.enable_default_handler()
     transformers.utils.logging.enable_explicit_format()
