@@ -34,7 +34,17 @@ import logging
 import os
 import random
 import sys
+import warnings
 from dataclasses import dataclass, field
+
+# 多卡场景下，非 rank0 在 HF 库 import 之前就用环境变量压低日志级别，
+# 避免 datasets/transformers 库在 import 时配置 logger 后被覆盖。
+# torchrun 启动时设置 RANK 环境变量；单卡运行时 RANK 未设或为 0。
+_rank = int(os.environ.get("RANK", "0"))
+if _rank != 0:
+    os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
+    os.environ.setdefault("DATASETS_VERBOSITY", "error")
+    warnings.filterwarnings("ignore")
 
 import datasets
 import numpy as np
