@@ -645,15 +645,6 @@ def main():
                 f"请检查 tokenizer 是否与训练数据匹配（语言、词表等）"
             )
 
-    if training_args.do_train and training_args.local_rank in [-1, 0]:
-        if data_args.text_column_names is not None:
-            _check_text_col = data_args.text_column_names.split(",")[0]
-        else:
-            _features = list(raw_datasets["train"].features)
-            _check_text_col = "sentence" if "sentence" in _features else _features[0]
-        check_unk_ratio(tokenizer, raw_datasets["train"], _check_text_col,
-                        max_length=data_args.max_seq_length or 512)
-
     if model_args.model_name_or_path:
         model = AutoModelForSequenceClassification.from_pretrained(
             model_args.model_name_or_path,
@@ -748,6 +739,17 @@ def main():
             load_from_cache_file=not data_args.overwrite_cache,
             desc="Running tokenizer on dataset",
         )
+
+    # UNK token 检查：放在 .map() 之后，避免 check_unk_ratio 内部调用 tokenizer 修改
+    # 其状态、进而导致 preprocess_function closure 跨 rank pickle 不一致。
+    if training_args.do_train and training_args.local_rank in [-1, 0]:
+        if data_args.text_column_names is not None:
+            _check_text_col = data_args.text_column_names.split(",")[0]
+        else:
+            _features = list(raw_datasets["train"].features)
+            _check_text_col = "sentence" if "sentence" in _features else _features[0]
+        check_unk_ratio(tokenizer, raw_datasets["train"], _check_text_col,
+                        max_length=data_args.max_seq_length or 512)
 
     if training_args.do_train:
         if "train" not in raw_datasets:
