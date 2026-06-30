@@ -215,6 +215,8 @@ class DataTrainingArguments:
             # 扩展名从可用的文件推断（train_file 优先，回落 test_file）
             ext_src = self.train_file or self.test_file
             ext = ext_src.split(".")[-1]
+            if ext == "jsonl":  # JSONL 与 JSON 等价处理（HF datasets 自动识别）
+                ext = "json"
             if ext not in ["csv", "json"]:
                 raise ValueError(
                     f"Data file should be a csv or json file, got '.{ext}'."
@@ -226,6 +228,8 @@ class DataTrainingArguments:
                     if not val_file:
                         raise ValueError("Empty path found in --validation_files.")
                     validation_extension = val_file.split(".")[-1]
+                    if validation_extension == "jsonl":
+                        validation_extension = "json"
                     if validation_extension != ext:
                         raise ValueError(
                             f"`validation_files` entry '{val_file}' should have the same extension (csv or json) as `train_file`."
@@ -390,6 +394,8 @@ def main():
                 test_files_list = [f.strip() for f in data_args.test_file.split(",") if f.strip()]
                 for tf in test_files_list:
                     test_extension = tf.split(".")[-1]
+                    if test_extension == "jsonl":
+                        test_extension = "json"
                     if test_extension != expected_ext:
                         raise ValueError(
                             f"`test_file` entry '{tf}' should have the same extension ({expected_ext}) as the source file."
@@ -404,12 +410,18 @@ def main():
             logger.info(f"load a local file for {key}: {data_files[key]}")
 
         # Loading a dataset from local csv/json files (单次加载 train + 单 test split)
-        raw_datasets = load_dataset(
-            "csv" if is_csv else "json",
-            data_files=data_files,
-            cache_dir=model_args.cache_dir,
-            token=model_args.token,
-        )
+        # predict-only + 多 test_file 时 data_files 为空（所有 test 在下方按文件单独加载），
+        # 此时跳过主 load_dataset，用空 DatasetDict 占位以保持后续代码形态一致。
+        if data_files:
+            raw_datasets = load_dataset(
+                "csv" if is_csv else "json",
+                data_files=data_files,
+                cache_dir=model_args.cache_dir,
+                token=model_args.token,
+            )
+        else:
+            from datasets import DatasetDict
+            raw_datasets = DatasetDict()
 
         # Load multiple validation files into separate splits（predict-only 路径跳过）
         if not predict_only:
@@ -729,6 +741,14 @@ def main():
     ]
     cache_fp = Hasher.hash(post_map_fps)
     tokenized_cache_dir = os.path.join(datasets.config.HF_DATASETS_CACHE, f"_tokenized_cls_{cache_fp}")
+    logger.warning(
+        f"[HASH-DEBUG rank {training_args.process_index}] "
+        f"cache_fp={cache_fp} "
+        f"splits={sorted(raw_datasets.keys())} "
+        f"per_split_fp={[(n, raw_datasets[n]._fingerprint) for n in sorted(raw_datasets.keys())]} "
+        f"post_map_fps={post_map_fps} "
+        f"map_kwargs={map_kwargs}"
+    )
     with training_args.main_process_first(desc="dataset map pre-processing"):
         from datasets import load_from_disk
         if os.path.exists(tokenized_cache_dir) and not data_args.overwrite_cache:
@@ -745,8 +765,21 @@ def main():
             raw_datasets.save_to_disk(tokenized_cache_dir)
             logger.info(f"Tokenized datasets and saved to cache: {tokenized_cache_dir}")
         else:
-            raw_datasets = load_from_disk(tokenized_cache_dir)
-            logger.info(f"Loaded tokenized datasets from cache (non-rank-0): {tokenized_cache_dir}")
+            try:
+                raw_datasets = load_from_disk(tokenized_cache_dir)
+                logger.info(f"Loaded tokenized datasets from cache (non-rank-0): {tokenized_cache_dir}")
+            except Exception as e:
+                logger.warning(
+                    f"rank {training_args.process_index}: cache miss at {tokenized_cache_dir} "
+                    f"({type(e).__name__}: {e}); falling back to local .map()"
+                )
+                raw_datasets = raw_datasets.map(
+                    preprocess_function,
+                    batched=True,
+                    num_proc=data_args.preprocessing_num_workers,
+                    load_from_cache_file=not data_args.overwrite_cache,
+                    desc="Running tokenizer on dataset (fallback)",
+                )
 
     if training_args.do_train:
         if "train" not in raw_datasets:
@@ -920,7 +953,7 @@ def main():
         checkpoint = None
         if training_args.resume_from_checkpoint is not None:
             checkpoint = training_args.resume_from_checkpoint
-        elif not training_args.overwrite_output_dir and os.path.isdir(training_args.output_dir):
+        elif not getattr(training_args, "overwrite_output_dir", False) and os.path.isdir(training_args.output_dir):
             last_checkpoint = get_last_checkpoint(training_args.output_dir)
             if last_checkpoint is not None:
                 checkpoint = last_checkpoint
