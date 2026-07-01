@@ -501,25 +501,19 @@ def main():
 
         with training_args.main_process_first(desc="dataset map tokenization"):
             if not data_args.streaming:
-                tokenized_cache_dir = os.path.join(datasets.config.HF_DATASETS_CACHE, f"_tokenized_mlm_{raw_datasets['train']._fingerprint}")
-                from datasets import load_from_disk
-                if os.path.exists(tokenized_cache_dir):
-                    tokenized_datasets = load_from_disk(tokenized_cache_dir)
-                    logger.info("Loaded tokenized datasets from cache.")
-                elif training_args.process_index == 0:
-                    tokenized_datasets = raw_datasets.map(
-                        tokenize_function,
-                        batched=True,
-                        num_proc=data_args.preprocessing_num_workers,
-                        remove_columns=column_names,
-                        load_from_cache_file=not data_args.overwrite_cache,
-                        desc="Running tokenizer on every text in dataset",
-                    )
-                    tokenized_datasets.save_to_disk(tokenized_cache_dir)
-                    logger.info("Tokenized datasets and saved to cache.")
-                else:
-                    tokenized_datasets = load_from_disk(tokenized_cache_dir)
-                    logger.info("Loaded tokenized datasets from cache (non-rank-0).")
+                # HF 默认 .map() + load_from_cache_file：rank0 写、其他 rank 读，
+                # cache key 自动包含 tokenize_function（含 max_seq_length、tokenizer
+                # 设置等），改任何参数都会自动失效。多卡共享前提是 closure pickle
+                # 跨 rank 一致——check_unk_ratio 已挪到 .map() 之后，无 rank0-only
+                # 状态污染，HF 默认机制即可工作。
+                tokenized_datasets = raw_datasets.map(
+                    tokenize_function,
+                    batched=True,
+                    num_proc=data_args.preprocessing_num_workers,
+                    remove_columns=column_names,
+                    load_from_cache_file=not data_args.overwrite_cache,
+                    desc="Running tokenizer on every text in dataset",
+                )
             else:
                 tokenized_datasets = raw_datasets.map(
                     tokenize_function,
