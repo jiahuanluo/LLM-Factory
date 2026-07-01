@@ -440,11 +440,6 @@ def main():
         column_names = list(raw_datasets["validation"].features)
     text_column_name = "text" if "text" in column_names else column_names[0]
 
-    if training_args.local_rank in [-1, 0]:
-        check_split = "train" if training_args.do_train else "validation"
-        check_unk_ratio(tokenizer, raw_datasets[check_split], text_column_name,
-                        max_length=data_args.max_seq_length or 512)
-
     if data_args.max_seq_length is None:
         max_seq_length = tokenizer.model_max_length
         if max_seq_length > 1024:
@@ -569,6 +564,14 @@ def main():
                     group_texts,
                     batched=True,
                 )
+
+    # UNK token 检查：放在 .map() 之后，避免 rank0 调用 tokenizer 修改其内部状态、
+    # 导致 tokenize_function closure 跨 rank pickle 不一致、多卡 tokenize cache
+    # hash 分叉（同 run_classification.py 的修复）。
+    if training_args.local_rank in [-1, 0]:
+        check_split = "train" if training_args.do_train else "validation"
+        check_unk_ratio(tokenizer, raw_datasets[check_split], text_column_name,
+                        max_length=data_args.max_seq_length or 512)
 
     if training_args.do_train:
         if "train" not in tokenized_datasets:
