@@ -177,9 +177,10 @@ class DataTrainingArguments:
         default=False, metadata={"help": "Overwrite the cached training and evaluation sets"}
     )
     validation_split_percentage: int | None = field(
-        default=0,
+        default=10,
         metadata={
-            "help": "The percentage of the train set used as validation set in case there's no validation split"
+            "help": "The percentage of the train set used as validation set in case there's no validation split. "
+                    "仅在 do_eval=true 且无 validation_file 时生效；do_eval=false 时不划分。"
         },
     )
     max_seq_length: int | None = field(
@@ -312,7 +313,8 @@ def main():
             streaming=data_args.streaming,
             trust_remote_code=model_args.trust_remote_code,
         )
-        if "validation" not in raw_datasets and data_args.validation_split_percentage > 0:
+        # 仅 do_eval 时才从 train 切 validation；do_eval=false 时保留全部数据当 train
+        if training_args.do_eval and "validation" not in raw_datasets and data_args.validation_split_percentage > 0:
             split = raw_datasets["train"].train_test_split(
                 test_size=data_args.validation_split_percentage / 100, seed=42
             )
@@ -335,8 +337,8 @@ def main():
             token=model_args.token,
         )
 
-        # If no validation data is there, validation_split_percentage will be used to divide the dataset.
-        if "validation" not in raw_datasets and data_args.validation_split_percentage > 0:
+        # 仅 do_eval 时才从 train 切 validation；do_eval=false 时保留全部数据当 train
+        if training_args.do_eval and "validation" not in raw_datasets and data_args.validation_split_percentage > 0:
             split = raw_datasets["train"].train_test_split(
                 test_size=data_args.validation_split_percentage / 100, seed=42
             )
