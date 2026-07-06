@@ -631,7 +631,7 @@ def main():
         checkpoint = None
         if training_args.resume_from_checkpoint is not None:
             checkpoint = training_args.resume_from_checkpoint
-        elif not getattr(training_args, "overwrite_output_dir", False) and os.path.isdir(training_args.output_dir):
+        elif not training_args.overwrite_output_dir and os.path.isdir(training_args.output_dir):
             last_checkpoint = get_last_checkpoint(training_args.output_dir)
             if last_checkpoint is not None:
                 checkpoint = last_checkpoint
