@@ -1205,10 +1205,15 @@ class NewForMaskedLM(NewPreTrainedModel):
         if labels is None or not self.new.config.unpad_inputs:
             length = None
             subset_indices = None
-        else:
+        elif self.training:
+            # 训练：unpad + subset_indices 优化（encoder 只输出 MLM mask 位置）
             length = attention_mask.sum(-1).tolist()
             labels = labels[attention_mask.bool()].unsqueeze(0)
             subset_indices = labels > -100
+        else:
+            # eval：unpad 但不 subset（让 sequence_output 含全部 valid_tokens，便于 re-pad 对齐 padded labels）
+            length = attention_mask.sum(-1).tolist()
+            subset_indices = None
 
         outputs = self.new(
             input_ids,
@@ -1230,14 +1235,28 @@ class NewForMaskedLM(NewPreTrainedModel):
 
         masked_lm_loss = None
         if labels is not None:
-            if subset_indices is None:
+            if subset_indices is not None:
+                # 训练 + unpad + subset：labels 已压缩到 [1, valid_tokens]，prediction_scores 是 [1, subset_N, vocab]
+                loss_scores = prediction_scores
+                loss_labels = labels[subset_indices]
+            elif length is not None:
+                # eval + unpad（不 subset）：prediction_scores 是 [1, valid_tokens, vocab]，labels 还是 padded
+                mask = attention_mask.bool()
+                loss_scores = prediction_scores.squeeze(0)
+                loss_labels = labels[mask]
+            else:
+                # 非 unpad 路径
                 mask = attention_mask.bool()
                 loss_scores = prediction_scores[mask]
                 loss_labels = labels[mask]
-            else:
-                loss_scores = prediction_scores
-                loss_labels = labels[subset_indices]
             masked_lm_loss = self.loss_fct(loss_scores, loss_labels)
+
+        # unpad 路径下，eval 时 re-pad logits 让 Trainer 的 compute_metrics 能对齐 padded labels
+        # train 时不 re-pad（loss 已用 unpadded 在内部算完），保持 unpad 速度
+        if length is not None and attention_mask is not None and not self.training:
+            batch_size_, seq_length_ = attention_mask.shape
+            indices_ = torch.nonzero(attention_mask.reshape(-1).bool(), as_tuple=False).flatten()
+            prediction_scores = pad_input(prediction_scores.squeeze(0), indices_, batch_size_, seq_length_)
 
         if not return_dict:
             output = (prediction_scores,) + outputs[2:]

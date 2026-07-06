@@ -1,0 +1,39 @@
+# IMDB MLM scratch 预训练 - BASELINE (官方 GTE-large-en-v1.5 架构)
+# 与 pt_mlm_imdb_phaseA.yaml 完全相同，仅 config_name/tokenizer_name 不同
+
+model_name_or_path: null
+config_name: models/gte-large-en-v1.5
+tokenizer_name: models/gte-large-en-v1.5
+trust_remote_code: true
+
+train_file: data/imdb/pretrain_corpus.txt
+validation_file: data/imdb/val_corpus.txt
+
+line_by_line: false
+max_seq_length: 256
+mlm_probability: 0.15
+pad_to_max_length: true
+
+do_train: true
+do_eval: true
+
+output_dir: tmp/imdb_mlm_baseline_out
+save_strategy: epoch
+eval_strategy: epoch
+
+num_train_epochs: 3
+per_device_train_batch_size: 16
+per_device_eval_batch_size: 32
+gradient_accumulation_steps: 1
+learning_rate: 5e-4
+warmup_ratio: 0.05
+weight_decay: 0.01
+max_grad_norm: 1.0
+
+fp16: true
+bf16: false
+
+logging_steps: 50
+logging_first_step: true
+report_to: []
+seed: 42

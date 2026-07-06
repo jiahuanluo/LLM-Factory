@@ -163,7 +163,7 @@ def rotate_half(x):
     return torch.cat((-x2, x1), dim=-1)
 
 
-def apply_rotary_pos_emb(q, k, cos, sin):
+def apply_rotary_pos_emb(q, k, cos, sin, partial_rope_dim=None):
     """Applies Rotary Position Embedding to the query and key tensors.
 
     Args:
@@ -171,12 +171,24 @@ def apply_rotary_pos_emb(q, k, cos, sin):
         k (`torch.Tensor`): The key tensor.
         cos (`torch.Tensor`): The cosine part of the rotary embedding.
         sin (`torch.Tensor`): The sine part of the rotary embedding.
+        partial_rope_dim (`int`, *optional*): If set, only the first `partial_rope_dim`
+            dimensions of q/k get RoPE applied; the rest pass through unchanged.
+            Qwen3-Next-style partial RoPE for better length extrapolation.
     Returns:
         `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
     """
     cos, sin = cos.to(q.dtype), sin.to(q.dtype)
-    q_embed = (q * cos) + (rotate_half(q) * sin)
-    k_embed = (k * cos) + (rotate_half(k) * sin)
+    if partial_rope_dim is None or partial_rope_dim >= q.shape[-1]:
+        q_embed = (q * cos) + (rotate_half(q) * sin)
+        k_embed = (k * cos) + (rotate_half(k) * sin)
+    else:
+        # Split rotated vs passthrough dims
+        q_rot, q_pass = q[..., :partial_rope_dim], q[..., partial_rope_dim:]
+        k_rot, k_pass = k[..., :partial_rope_dim], k[..., partial_rope_dim:]
+        q_rot = (q_rot * cos) + (rotate_half(q_rot) * sin)
+        k_rot = (k_rot * cos) + (rotate_half(k_rot) * sin)
+        q_embed = torch.cat([q_rot, q_pass], dim=-1)
+        k_embed = torch.cat([k_rot, k_pass], dim=-1)
     return q_embed, k_embed
 
 
@@ -188,7 +200,9 @@ class RotaryEmbedding(torch.nn.Module):
         self.max_position_embeddings = max_position_embeddings
         self.base = base
         inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2).float().to(device) / self.dim))
-        self.register_buffer("inv_freq", inv_freq, persistent=False)
+        # persistent=True: HF 5.x 默认走 meta device 加载，persistent=False 的 buffer 会留在 meta
+        # 状态导致 from_pretrained 后值为垃圾。inv_freq 很小，存盘代价可忽略。
+        self.register_buffer("inv_freq", inv_freq, persistent=True)
 
         # Build here to make `torch.jit.trace` work.
         self._set_cos_sin_cache(
@@ -202,12 +216,20 @@ class RotaryEmbedding(torch.nn.Module):
         freqs = torch.einsum("i,j->ij", t, self.inv_freq)
         # Different from paper, but it uses a different permutation in order to obtain the same calculation
         emb = torch.cat((freqs, freqs), dim=-1)
-        self.register_buffer("cos_cached", emb.cos().to(dtype), persistent=False)
-        self.register_buffer("sin_cached", emb.sin().to(dtype), persistent=False)
+        # persistent=True: HF 5.x from_pretrained 用 meta device 加载，非 persistent 的 buffer
+        # 会被分配但用垃圾内存填充（不调用我们的 _set_cos_sin_cache）。
+        self.register_buffer("cos_cached", emb.cos().to(dtype), persistent=True)
+        self.register_buffer("sin_cached", emb.sin().to(dtype), persistent=True)
 
     def forward(self, x, seq_len=None):
         # x: [bs, num_attention_heads, seq_len, head_size]
-        if seq_len > self.max_seq_len_cached:
+        # HF 5.x from_pretrained 走 meta device；cos_cached/sin_cached 是 persistent=False，
+        # 可能未物化。检测 meta / 设备不一致 / 长度不够，触发重建。
+        if (
+            seq_len > self.max_seq_len_cached
+            or self.cos_cached.is_meta
+            or self.cos_cached.device != x.device
+        ):
             self._set_cos_sin_cache(seq_len=seq_len, device=x.device, dtype=x.dtype)
 
         return (
@@ -240,15 +262,66 @@ class NTKScalingRotaryEmbedding(RotaryEmbedding):
                 lambda_1_m = (a * torch.arange(1, self.dim // 2 + 1).float().to(device) ** self.mixed_b).exp()  # (12)
                 inv_freq = inv_freq / lambda_1_m  # (10)
 
-            self.register_buffer("inv_freq", inv_freq, persistent=False)
+            self.register_buffer("inv_freq", inv_freq, persistent=True)
 
         t = torch.arange(self.max_seq_len_cached, device=device, dtype=torch.float32)
 
         freqs = torch.einsum("i,j->ij", t, self.inv_freq)
         # Different from paper, but it uses a different permutation in order to obtain the same calculation
         emb = torch.cat((freqs, freqs), dim=-1)
-        self.register_buffer("cos_cached", emb.cos().to(dtype), persistent=False)
-        self.register_buffer("sin_cached", emb.sin().to(dtype), persistent=False)
+        self.register_buffer("cos_cached", emb.cos().to(dtype), persistent=True)
+        self.register_buffer("sin_cached", emb.sin().to(dtype), persistent=True)
+
+
+class YaRNScalingRotaryEmbedding(RotaryEmbedding):
+    """YaRN: Yet another RoPE extensioN. https://arxiv.org/abs/2309.00071"""
+
+    def __init__(self, dim, max_position_embeddings=512, base=10000, device=None,
+                 scaling_factor=1.0, original_max_position_embeddings=512,
+                 attn_factor=1.0, beta_fast=32, beta_slow=1):
+        self.scaling_factor = scaling_factor
+        self.original_max_position_embeddings = original_max_position_embeddings
+        self.attn_factor = attn_factor
+        self.beta_fast = beta_fast
+        self.beta_slow = beta_slow
+        super().__init__(dim, max_position_embeddings, base, device)
+        # Rebuild cache with YaRN scaling
+        self._set_cos_sin_cache(max_position_embeddings, self.inv_freq.device, torch.get_default_dtype())
+
+    @staticmethod
+    def yarn_find_correction_range(low_rot, high_rot, dim, base=10000):
+        low = math.floor(dim * math.log(low_rot / (2 * math.pi * base)) / (2 * math.log(base)))
+        high = math.ceil(dim * math.log(high_rot / (2 * math.pi * base)) / (2 * math.log(base)))
+        return max(low, 0), min(high, dim - 1)
+
+    @staticmethod
+    def yarn_ramp_mask(low, high, dim):
+        if low == high:
+            high += 0.001
+        linear_func = (torch.arange(dim, dtype=torch.float32) - low) / (high - low)
+        return linear_func.clamp(0, 1)
+
+    def _set_cos_sin_cache(self, seq_len, device, dtype):
+        self.max_seq_len_cached = seq_len
+
+        freq_extra = 1.0 / (self.base ** (torch.arange(0, self.dim, 2).float().to(device) / self.dim))
+        freq_inter = 1.0 / (self.scaling_factor * self.base ** (torch.arange(0, self.dim, 2).float().to(device) / self.dim))
+
+        low, high = self.yarn_find_correction_range(
+            self.beta_fast, self.beta_slow, self.dim, self.base
+        )
+        ramp_mask = self.yarn_ramp_mask(low, high, self.dim // 2).to(device)
+
+        inv_freq = freq_inter * (1 - ramp_mask) + freq_extra * ramp_mask
+        self.register_buffer("inv_freq", inv_freq, persistent=True)
+
+        t = torch.arange(self.max_seq_len_cached, device=device, dtype=torch.float32)
+        freqs = torch.einsum("i,j->ij", t, self.inv_freq)
+        emb = torch.cat((freqs, freqs), dim=-1)
+
+        scale = self.attn_factor / (self.scaling_factor ** (self.dim / (self.dim - 2)))
+        self.register_buffer("cos_cached", (emb.cos() * scale).to(dtype), persistent=True)
+        self.register_buffer("sin_cached", (emb.sin() * scale).to(dtype), persistent=True)
 
 
 class RMSNorm(nn.Module):
@@ -302,7 +375,10 @@ class NewEmbeddings(nn.Module):
 
         # self.LayerNorm is not snake-cased to stick with TensorFlow model variable name and be able to load
         # any TensorFlow checkpoint file
-        self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        # 注意：之前这里硬编码 nn.LayerNorm，与 config.layer_norm_type 不一致；
+        # 现在统一走 LAYER_NORM 工厂，rms_norm 配置才真正生效。
+        _ln_class = LAYER_NORM[config.layer_norm_type]
+        self.LayerNorm = _ln_class(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         # position_ids is contiguous in memory and excluded when serialized
         self.register_buffer(
@@ -310,23 +386,40 @@ class NewEmbeddings(nn.Module):
         )
 
     def _init_rope(self, config):
+        head_dim = int(config.hidden_size / config.num_attention_heads)
+        partial_rope_ratio = getattr(config, 'partial_rope_ratio', 1.0)
+        # Partial RoPE: RotaryEmbedding 用减小的 dim（仅前 partial 部分），其余 pass-through
+        rope_dim = max(1, int(head_dim * partial_rope_ratio))
         kwargs = dict(
-            dim=int(config.hidden_size / config.num_attention_heads),
+            dim=rope_dim,
             max_position_embeddings=config.max_position_embeddings,
             base=config.rope_theta
         )
-        if config.rope_scaling is None:
+        # transformers >= 4.39 may rename rope_scaling to rope_parameters
+        rope_scaling = (
+            getattr(config, 'custom_rope_scaling', None)
+            or getattr(config, 'rope_scaling', None)
+            or getattr(config, 'rope_parameters', None)
+        )
+        if rope_scaling is None:
             self.rotary_emb = RotaryEmbedding(**kwargs)
         else:
-            kwargs.update(scaling_factor=config.rope_scaling["factor"])
-            scaling_type = config.rope_scaling["type"]
+            kwargs.update(scaling_factor=rope_scaling["factor"])
+            # transformers 5.x 把 schema 从 "type" 改成 "rope_type"；同时兼容两种
+            scaling_type = rope_scaling.get("type") or rope_scaling.get("rope_type")
             if scaling_type == 'ntk':
-                kwargs.update(mixed_b=config.rope_scaling.get('mixed_b', None))
+                kwargs.update(mixed_b=rope_scaling.get('mixed_b', None))
                 self.rotary_emb = NTKScalingRotaryEmbedding(**kwargs)
-            # elif scaling_type == "linear":
-            #     self.rotary_emb = LinearScalingRotaryEmbedding(**kwargs)
-            # elif scaling_type == "dynamic":
-            #     self.rotary_emb = DynamicNTKScalingRotaryEmbedding(**kwargs)
+            elif scaling_type == 'yarn':
+                kwargs.update(
+                    original_max_position_embeddings=rope_scaling.get(
+                        'original_max_position_embeddings', config.max_position_embeddings
+                    ),
+                    attn_factor=rope_scaling.get('attn_factor', 1.0),
+                    beta_fast=rope_scaling.get('beta_fast', 32),
+                    beta_slow=rope_scaling.get('beta_slow', 1),
+                )
+                self.rotary_emb = YaRNScalingRotaryEmbedding(**kwargs)
             else:
                 raise ValueError(f"Unknown RoPE scaling type {scaling_type}")
 
@@ -393,16 +486,12 @@ class NewEmbeddings(nn.Module):
 
         # Set and unpad position_ids
         if position_ids is None:
-            if seq_length > self.position_ids.size(0):
-                self.register_buffer(
-                    "position_ids", torch.arange(seq_length, device=embeddings.device), persistent=False
-                )
             if unpad_inputs:
                 # [1, cumsum_seq_len]
-                position_ids = torch.cat([self.position_ids[:l] for l in length]).unsqueeze(0)
+                position_ids = torch.cat([torch.arange(l, device=embeddings.device) for l in length]).unsqueeze(0)
             else:
                 # [bs, seq_len]
-                position_ids = self.position_ids[:seq_length].expand(batch_size, -1)
+                position_ids = torch.arange(seq_length, device=embeddings.device).expand(batch_size, -1)
         elif unpad_inputs:
             position_ids = position_ids[attention_mask_bool].unsqueeze(0)  # [1, cumsum_seq_len]
 
@@ -438,7 +527,7 @@ class NewEmbeddings(nn.Module):
 
 
 class NewAttention(nn.Module):
-    def __init__(self, config: NewConfig, pack_qkv=None, use_memory_efficient_attention=None):
+    def __init__(self, config: NewConfig, use_memory_efficient_attention=None, is_global=True):
         super().__init__()
         self.config = config
         if config.hidden_size % config.num_attention_heads != 0 and not hasattr(config, "embedding_size"):
@@ -452,16 +541,32 @@ class NewAttention(nn.Module):
         self.attention_head_size = int(config.hidden_size / config.num_attention_heads)
         self.all_head_size = self.num_attention_heads * self.attention_head_size
 
-        if pack_qkv is None:
-            pack_qkv = config.pack_qkv
-        self.pack_qkv = pack_qkv
+        # GQA: num_kv_heads <= num_attention_heads
+        self.num_kv_heads = getattr(config, 'num_kv_heads', None) or config.num_attention_heads
+        self.kv_head_size = self.attention_head_size
+        self.kv_all_head_size = self.num_kv_heads * self.kv_head_size
+        self.num_kv_groups = self.num_attention_heads // self.num_kv_heads
 
-        if self.pack_qkv:
-            self.qkv_proj = nn.Linear(config.hidden_size, self.all_head_size * 3, bias=True)
-        else:
-            self.q_proj = nn.Linear(config.hidden_size, self.all_head_size, bias=True)
-            self.k_proj = nn.Linear(config.hidden_size, self.all_head_size, bias=True)
-            self.v_proj = nn.Linear(config.hidden_size, self.all_head_size, bias=True)
+        # Q/K/V always separate projections (GQA incompatible with fused QKV)
+        self.q_proj = nn.Linear(config.hidden_size, self.all_head_size, bias=True)
+        self.k_proj = nn.Linear(config.hidden_size, self.kv_all_head_size, bias=True)
+        self.v_proj = nn.Linear(config.hidden_size, self.kv_all_head_size, bias=True)
+
+        # QK-Norm (per-head RMSNorm on Q and K before attention)
+        self.qk_norm = getattr(config, 'qk_norm', False)
+        if self.qk_norm:
+            ln_class = LAYER_NORM[config.layer_norm_type]
+            self.q_norm = ln_class(self.attention_head_size, eps=config.layer_norm_eps)
+            self.k_norm = ln_class(self.attention_head_size, eps=config.layer_norm_eps)
+
+        # Partial RoPE: only apply RoPE to first `partial_rope_dim` of head_dim
+        # (Qwen3-Next style — improves length extrapolation for free)
+        self.partial_rope_dim = int(self.attention_head_size * getattr(config, 'partial_rope_ratio', 1.0))
+
+        # ModernBERT-style alternating SWA: this layer uses global or sliding-window attention
+        self.is_global = is_global
+        self.alternating_swa = getattr(config, 'alternating_swa', False)
+        self.swa_window_size = getattr(config, 'swa_window_size', 128)
 
         self.dropout = nn.Dropout(config.attention_probs_dropout_prob)
         self.o_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=True)
@@ -484,22 +589,50 @@ class NewAttention(nn.Module):
         output_attentions: Optional[bool] = False,
         qkv_inputs: Optional[Tuple] = None,  # For RetroMAE
     ) -> Tuple[torch.Tensor, ...]:
-        shape_hd = (self.num_attention_heads, self.attention_head_size)
-        # qkv
-        if self.pack_qkv and qkv_inputs is None:
-            qkv_pack = self.qkv_proj(hidden_states).split(self.all_head_size, dim=-1)
-        else:
-            if qkv_inputs is None:
-                qkv_inputs = (hidden_states, hidden_states, hidden_states)
-            qkv_pack = [
-                getattr(self, n + '_proj')(s) for s, n in zip(qkv_inputs, 'qkv')
-            ]
-        query_states, key_states, value_states = [t.view(t.shape[:-1] + shape_hd) for t in qkv_pack]
+        # Q/K/V projections
+        if qkv_inputs is None:
+            qkv_inputs = (hidden_states, hidden_states, hidden_states)
+        query_states = self.q_proj(qkv_inputs[0]).view(qkv_inputs[0].shape[:-1] + (self.num_attention_heads, self.attention_head_size))
+        key_states = self.k_proj(qkv_inputs[1]).view(qkv_inputs[1].shape[:-1] + (self.num_kv_heads, self.attention_head_size))
+        value_states = self.v_proj(qkv_inputs[2]).view(qkv_inputs[2].shape[:-1] + (self.num_kv_heads, self.attention_head_size))
+
+        # QK-Norm: per-head RMSNorm before attention
+        if self.qk_norm:
+            query_states = self.q_norm(query_states)
+            key_states = self.k_norm(key_states)
+
+        # GQA: repeat K/V heads to match Q heads
+        if self.num_kv_groups > 1:
+            key_states = key_states.repeat_interleave(self.num_kv_groups, dim=2)
+            value_states = value_states.repeat_interleave(self.num_kv_groups, dim=2)
 
         if self.config.position_embedding_type == 'rope':
-            query_states, key_states = apply_rotary_pos_emb(query_states, key_states, *rope_embeds)
+            query_states, key_states = apply_rotary_pos_emb(
+                query_states, key_states, *rope_embeds, self.partial_rope_dim
+            )
 
         dtype = query_states.dtype
+
+        # ModernBERT alternating SWA: sliding-window mask for non-global layers
+        # (only effective on padded path with tensor attention_bias;
+        #  xformers BlockDiagonalMask + SWA needs custom impl, skip silently)
+        if (
+            self.alternating_swa
+            and not self.is_global
+            and torch.is_tensor(attention_bias)
+            and query_states.shape[1] > self.swa_window_size
+        ):
+            seq_len = query_states.shape[1]
+            half_w = self.swa_window_size // 2
+            idx = torch.arange(seq_len, device=query_states.device)
+            diff = (idx.unsqueeze(0) - idx.unsqueeze(1)).abs()
+            swa_mask = torch.where(
+                diff <= half_w,
+                torch.zeros((), dtype=dtype, device=query_states.device),
+                torch.full((), torch.finfo(dtype).min, dtype=dtype, device=query_states.device),
+            )
+            # Broadcast over batch + heads: (1, 1, seq, seq)
+            attention_bias = attention_bias + swa_mask.unsqueeze(0).unsqueeze(0)
 
         if self.config.logn_attention_scale and attention_scale is not None:
             # https://kexue.fm/archives/8823
@@ -643,9 +776,9 @@ class NewLayer(nn.Module):
     def __init__(
         self,
         config: NewConfig,
-        pack_qkv=None,
         use_memory_efficient_attention=None,
-        attn_implementation=None
+        attn_implementation=None,
+        layer_idx: Optional[int] = None,
     ):
         super().__init__()
         if attn_implementation is None:
@@ -656,8 +789,18 @@ class NewLayer(nn.Module):
             if attn_implementation != 'eager':
                 logger.warning_once(f"Override {attn_implementation=} to 'eager' as {use_memory_efficient_attention=}")
                 attn_implementation = 'eager'  # Since it will be SDPA by default for torch>=2.1.1
+
+        # ModernBERT alternating SWA: every 3rd layer is global (idx % 3 == 2),
+        # others use sliding-window attention. layer_idx=None 默认全 global（向后兼容）。
+        if getattr(config, 'alternating_swa', False) and layer_idx is not None:
+            is_global = (layer_idx % 3 == 2)
+        else:
+            is_global = True
+
         self.attention = NEW_ATTENTION_CLASSES[attn_implementation](
-            config, pack_qkv=pack_qkv, use_memory_efficient_attention=use_memory_efficient_attention
+            config,
+            use_memory_efficient_attention=use_memory_efficient_attention,
+            is_global=is_global,
         )
         self.mlp = NewGatedMLP(config)
 
@@ -682,8 +825,9 @@ class NewLayer(nn.Module):
         output_attentions: Optional[bool] = False,
         qkv_inputs: Optional[Tuple] = None,  # For RetroMAE
     ) -> Tuple[torch.Tensor, ...]:
-        # Multi head self attention
+        # Pre-norm self attention
         residual = hidden_states if qkv_inputs is None else qkv_inputs[0]
+        hidden_states = self.attn_ln(hidden_states)
         attention_outputs = self.attention(
             hidden_states,
             attention_bias,
@@ -703,15 +847,13 @@ class NewLayer(nn.Module):
         if subset_indices is not None:
             hidden_states = hidden_states[subset_indices]
 
-        hidden_states = self.attn_ln(hidden_states)
-
-        # Fully Connected
+        # Pre-norm FFN
         residual = hidden_states
+        hidden_states = self.mlp_ln(hidden_states)
         hidden_states = self.mlp(hidden_states)
         if self.hidden_dropout is not None:
             hidden_states = self.hidden_dropout(hidden_states)
         hidden_states = residual + hidden_states
-        hidden_states = self.mlp_ln(hidden_states)
 
         # add self attentions if we output attention weights
         outputs = (hidden_states,) + attention_outputs[1:]
@@ -722,7 +864,9 @@ class NewEncoder(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        self.layer = nn.ModuleList([NewLayer(config) for _ in range(config.num_hidden_layers)])
+        self.layer = nn.ModuleList([
+            NewLayer(config, layer_idx=i) for i in range(config.num_hidden_layers)
+        ])
         self.gradient_checkpointing = False
 
     def forward(
@@ -838,9 +982,39 @@ class NewPreTrainedModel(PreTrainedModel):
             module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
             if module.padding_idx is not None:
                 module.weight.data[module.padding_idx].zero_()
-        elif isinstance(module, nn.LayerNorm):
-            module.bias.data.zero_()
-            module.weight.data.fill_(1.0)
+        elif isinstance(module, nn.LayerNorm) or "RMSNorm" in module.__class__.__name__:
+            # LayerNorm: bias→0, weight→1；RMSNorm: 无 bias，weight→1
+            if getattr(module, "bias", None) is not None:
+                module.bias.data.zero_()
+            if getattr(module, "weight", None) is not None:
+                module.weight.data.fill_(1.0)
+
+
+class LatentPooling(nn.Module):
+    """Latent Attention Pooling (NV-Embed style). Uses learnable latent queries
+    to attend to the sequence via cross-attention."""
+
+    def __init__(self, config: NewConfig):
+        super().__init__()
+        self.num_latents = getattr(config, 'num_latents', 1)
+        self.latents = nn.Parameter(torch.randn(self.num_latents, config.hidden_size) * 0.02)
+        self.cross_attn = nn.MultiheadAttention(
+            config.hidden_size, config.num_attention_heads,
+            dropout=config.attention_probs_dropout_prob, batch_first=True
+        )
+        ln_class = LAYER_NORM[config.layer_norm_type]
+        self.norm = ln_class(config.hidden_size, eps=config.layer_norm_eps)
+
+    def forward(self, hidden_states: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        batch_size = hidden_states.size(0)
+        latents = self.latents.unsqueeze(0).expand(batch_size, -1, -1)
+        key_padding_mask = ~(attention_mask.bool()) if attention_mask is not None else None
+        pooled, _ = self.cross_attn(
+            query=latents, key=hidden_states, value=hidden_states,
+            key_padding_mask=key_padding_mask
+        )
+        pooled = self.norm(pooled)
+        return pooled.squeeze(1) if self.num_latents == 1 else pooled.mean(dim=1)
 
 
 class NewModel(NewPreTrainedModel):
@@ -855,7 +1029,16 @@ class NewModel(NewPreTrainedModel):
         self.embeddings = NewEmbeddings(config)
         self.encoder = NewEncoder(config)
 
-        self.pooler = NewPooler(config) if add_pooling_layer else None
+        # Pooling strategy: "latent" (cross-attention) or "mean" (default)
+        self.pooling_type = getattr(config, 'pooling_type', 'mean')
+        self.add_pooling_layer = add_pooling_layer
+        if add_pooling_layer:
+            if self.pooling_type == 'latent':
+                self.pooler = LatentPooling(config)
+            else:
+                self.pooler = None  # mean pooling done in forward
+        else:
+            self.pooler = None
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1026,7 +1209,16 @@ class NewModel(NewPreTrainedModel):
             indices, batch_size, seq_length
         )
 
-        pooled_output = self.pooler(sequence_output) if self.pooler is not None else None
+        # Pooling
+        if self.pooler is not None:
+            # Latent attention pooling (NV-Embed style)
+            pooled_output = self.pooler(sequence_output, attention_mask)
+        elif self.add_pooling_layer and self.pooling_type == 'mean':
+            # Mean pooling: average over non-padding tokens
+            mask = attention_mask.unsqueeze(-1).to(sequence_output.dtype)
+            pooled_output = (sequence_output * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1e-9)
+        else:
+            pooled_output = None
 
         if not return_dict:
             return (sequence_output, pooled_output) + encoder_outputs[1:]
@@ -1044,7 +1236,9 @@ class NewLMPredictionHead(nn.Module):
         super().__init__()
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
         self.transform_act_fn = ACT2FN[config.hidden_act]
-        self.norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        # 之前硬编码 nn.LayerNorm；统一走 LAYER_NORM 工厂
+        _ln_class = LAYER_NORM[config.layer_norm_type]
+        self.norm = _ln_class(config.hidden_size, eps=config.layer_norm_eps)
 
         # The output weights are the same as the input embeddings, but there is
         # an output-only bias for each token.
@@ -1059,7 +1253,9 @@ class NewLMPredictionHead(nn.Module):
 
 
 class NewForMaskedLM(NewPreTrainedModel):
-    _tied_weights_keys = ["lm_head.decoder.bias", "lm_head.decoder.weight"]
+    # transformers 5.x: _tied_weights_keys 是 {target: source} dict
+    # decoder.weight 与 word_embeddings 共享；decoder.bias 是 Linear 自带，不 tie
+    _tied_weights_keys = {"lm_head.decoder.weight": "new.embeddings.word_embeddings.weight"}
 
     def __init__(self, config: NewConfig):
         super().__init__(config)
@@ -1102,10 +1298,15 @@ class NewForMaskedLM(NewPreTrainedModel):
         if labels is None or not self.new.config.unpad_inputs:
             length = None
             subset_indices = None
-        else:
+        elif self.training:
+            # 训练：unpad + subset_indices 优化（encoder 只输出 MLM mask 位置）
             length = attention_mask.sum(-1).tolist()
             labels = labels[attention_mask.bool()].unsqueeze(0)
             subset_indices = labels > -100
+        else:
+            # eval：unpad 但不 subset（让 sequence_output 含全部 valid_tokens，便于 re-pad 对齐 padded labels）
+            length = attention_mask.sum(-1).tolist()
+            subset_indices = None
 
         outputs = self.new(
             input_ids,
@@ -1127,13 +1328,28 @@ class NewForMaskedLM(NewPreTrainedModel):
 
         masked_lm_loss = None
         if labels is not None:
-            if subset_indices is None:
+            if subset_indices is not None:
+                # 训练 + unpad + subset：labels 已压缩到 [1, valid_tokens]，prediction_scores 是 [1, subset_N, vocab]
+                loss_scores = prediction_scores
+                loss_labels = labels[subset_indices]
+            elif length is not None:
+                # eval + unpad（不 subset）：prediction_scores 是 [1, valid_tokens, vocab]，labels 还是 padded
                 mask = attention_mask.bool()
-                prediction_scores = prediction_scores[mask]
-                labels = labels[mask]
+                loss_scores = prediction_scores.squeeze(0)
+                loss_labels = labels[mask]
             else:
-                labels = labels[subset_indices]
-            masked_lm_loss = self.loss_fct(prediction_scores, labels)
+                # 非 unpad 路径
+                mask = attention_mask.bool()
+                loss_scores = prediction_scores[mask]
+                loss_labels = labels[mask]
+            masked_lm_loss = self.loss_fct(loss_scores, loss_labels)
+
+        # unpad 路径下，eval 时 re-pad logits 让 Trainer 的 compute_metrics 能对齐 padded labels
+        # train 时不 re-pad（loss 已用 unpadded 在内部算完），保持 unpad 速度
+        if length is not None and attention_mask is not None and not self.training:
+            batch_size_, seq_length_ = attention_mask.shape
+            indices_ = torch.nonzero(attention_mask.reshape(-1).bool(), as_tuple=False).flatten()
+            prediction_scores = pad_input(prediction_scores.squeeze(0), indices_, batch_size_, seq_length_)
 
         if not return_dict:
             output = (prediction_scores,) + outputs[2:]
@@ -1160,8 +1376,53 @@ class NewForSequenceClassification(NewPreTrainedModel):
         self.dropout = nn.Dropout(classifier_dropout)
         self.classifier = nn.Linear(config.hidden_size, config.num_labels)
 
+        # Matryoshka embedding: train with multiple embedding dimensions
+        self.matryoshka_dims = getattr(config, 'matryoshka_dims', None)
+
         # Initialize weights and apply final processing
         self.post_init()
+
+    def _compute_loss(self, logits, labels):
+        """Compute classification loss based on problem type."""
+        if labels is None:
+            return None
+        if self.config.problem_type is None:
+            if self.num_labels == 1:
+                self.config.problem_type = "regression"
+            elif self.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
+                self.config.problem_type = "single_label_classification"
+            else:
+                self.config.problem_type = "multi_label_classification"
+
+        if self.config.problem_type == "regression":
+            loss_fct = nn.MSELoss()
+            if self.num_labels == 1:
+                return loss_fct(logits.squeeze(), labels.squeeze())
+            return loss_fct(logits, labels)
+        elif self.config.problem_type == "single_label_classification":
+            return nn.CrossEntropyLoss()(logits.view(-1, self.num_labels), labels.view(-1))
+        elif self.config.problem_type == "multi_label_classification":
+            return nn.BCEWithLogitsLoss()(logits, labels)
+        return None
+
+    def _matryoshka_loss(self, pooled_output, labels):
+        """Matryoshka Representation Learning: compute loss at multiple dimensions.
+        Truncated embeddings are zero-padded to hidden_size before classification."""
+        hidden_size = pooled_output.size(-1)
+        loss = 0.0
+        num_dims = len(self.matryoshka_dims)
+        for dim in self.matryoshka_dims:
+            if dim > hidden_size:
+                continue
+            # Truncate then zero-pad to original hidden_size
+            sub_pooled = torch.zeros_like(pooled_output)
+            sub_pooled[:, :dim] = pooled_output[:, :dim]
+            sub_pooled = self.dropout(sub_pooled)
+            sub_logits = self.classifier(sub_pooled)
+            dim_loss = self._compute_loss(sub_logits, labels)
+            if dim_loss is not None:
+                loss = loss + dim_loss / num_dims
+        return loss
 
     def forward(
         self,
@@ -1200,31 +1461,14 @@ class NewForSequenceClassification(NewPreTrainedModel):
 
         pooled_output = outputs[1]
 
-        pooled_output = self.dropout(pooled_output)
-        logits = self.classifier(pooled_output)
-
-        loss = None
-        if labels is not None:
-            if self.config.problem_type is None:
-                if self.num_labels == 1:
-                    self.config.problem_type = "regression"
-                elif self.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
-                    self.config.problem_type = "single_label_classification"
-                else:
-                    self.config.problem_type = "multi_label_classification"
-
-            if self.config.problem_type == "regression":
-                loss_fct = nn.MSELoss()
-                if self.num_labels == 1:
-                    loss = loss_fct(logits.squeeze(), labels.squeeze())
-                else:
-                    loss = loss_fct(logits, labels)
-            elif self.config.problem_type == "single_label_classification":
-                loss_fct = nn.CrossEntropyLoss()
-                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
-            elif self.config.problem_type == "multi_label_classification":
-                loss_fct = nn.BCEWithLogitsLoss()
-                loss = loss_fct(logits, labels)
+        # Matryoshka: compute loss at multiple embedding dimensions
+        if self.matryoshka_dims and labels is not None and self.training:
+            loss = self._matryoshka_loss(pooled_output, labels)
+            logits = self.classifier(self.dropout(pooled_output))
+        else:
+            pooled_output = self.dropout(pooled_output)
+            logits = self.classifier(pooled_output)
+            loss = self._compute_loss(logits, labels)
 
         if not return_dict:
             output = (logits,) + outputs[2:]

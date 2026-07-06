@@ -109,17 +109,24 @@ class NewConfig(PretrainedConfig):
         # pad_token_id=0,
         position_embedding_type="rope",
         rope_theta=10000.0,
-        rope_scaling=None,
+        rope_scaling=None,  # 兼容 HF 字段，但我们的 init_rope 用下面的 custom_rope_scaling
+        custom_rope_scaling=None,  # {"type": "yarn"/"ntk", "factor": ..., ...}；避开 HF 5.x 的 rope validator
         classifier_dropout=None,
         pack_qkv=True,
         unpad_inputs=False,
         use_memory_efficient_attention=False,
         logn_attention_scale=False,
         logn_attention_clip1=False,
+        tie_word_embeddings=True,
+        # Phase A 新增
+        qk_norm=True,
+        partial_rope_ratio=1.0,
+        alternating_swa=False,
+        swa_window_size=128,
         **kwargs,
     ):
-        super().__init__(**kwargs)
-
+        # HF 5.x 在 super().__init__() 里就跑 RoPE validator（读 max_position_embeddings 等），
+        # 所以必须先把自己关心的字段赋值，再调 super。
         self.vocab_size = vocab_size
         self.hidden_size = hidden_size
         self.num_hidden_layers = num_hidden_layers
@@ -136,6 +143,7 @@ class NewConfig(PretrainedConfig):
         self.position_embedding_type = position_embedding_type
         self.rope_theta = rope_theta
         self.rope_scaling = rope_scaling
+        self.custom_rope_scaling = custom_rope_scaling
         self.classifier_dropout = classifier_dropout
 
         self.pack_qkv = pack_qkv
@@ -144,8 +152,17 @@ class NewConfig(PretrainedConfig):
         self.logn_attention_scale = logn_attention_scale
         self.logn_attention_clip1 = logn_attention_clip1
 
+        # Phase A: QK-Norm, Partial RoPE, Alternating SWA
+        self.qk_norm = qk_norm
+        self.partial_rope_ratio = partial_rope_ratio
+        self.alternating_swa = alternating_swa
+        self.swa_window_size = swa_window_size
+
         # GQA, pooling, matryoshka
         self.num_kv_heads = kwargs.pop('num_kv_heads', None)
         self.pooling_type = kwargs.pop('pooling_type', 'mean')
         self.num_latents = kwargs.pop('num_latents', 1)
         self.matryoshka_dims = kwargs.pop('matryoshka_dims', None)
+
+        super().__init__(tie_word_embeddings=tie_word_embeddings, **kwargs)
+

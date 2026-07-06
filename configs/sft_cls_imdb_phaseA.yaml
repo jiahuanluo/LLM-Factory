@@ -1,0 +1,27 @@
+# IMDB 分类微调 - PHASE A (从 tmp/imdb_mlm_phaseA_out 初始化)
+model_name_or_path: tmp/imdb_mlm_phaseA_out
+trust_remote_code: true
+
+train_file: data/imdb/train.csv
+validation_files: data/imdb/val.csv
+text_column_names: sentence
+
+do_train: true
+do_eval: true
+
+output_dir: tmp/imdb_cls_phaseA_out
+save_strategy: "no"
+eval_strategy: epoch
+
+num_train_epochs: 3
+per_device_train_batch_size: 16
+per_device_eval_batch_size: 32
+learning_rate: 5e-5
+weight_decay: 0.01
+
+fp16: true
+bf16: false
+
+logging_steps: 50
+report_to: []
+seed: 42
