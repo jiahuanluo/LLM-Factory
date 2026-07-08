@@ -338,7 +338,8 @@ class RMSNorm(nn.Module):
         hidden_states = hidden_states.to(torch.float32)
         variance = hidden_states.pow(2).mean(-1, keepdim=True)
         hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        return self.weight * hidden_states.to(input_dtype)
+        # weight 是 fp32 Parameter，与 fp16 乘会 promote 到 fp32，导致下游 xformers 报 Q/K/V dtype 不一致
+        return self.weight.to(input_dtype) * hidden_states.to(input_dtype)
 
 
 LAYER_NORM = {
