@@ -32,26 +32,57 @@ def _expand_paths(config):
     return config
 
 
-def read_args(parser):
-    """Parse arguments from YAML, JSON, or CLI."""
-    if len(sys.argv) > 1 and sys.argv[1].endswith((".yaml", ".yml")):
-        with open(sys.argv[1]) as f:
-            config = yaml.safe_load(f) or {}
-        # CLI overrides: --key value pairs after the YAML path
-        if len(sys.argv) > 2:
-            cli_args = sys.argv[2:]
-            i = 0
-            while i < len(cli_args):
-                if cli_args[i].startswith("--"):
-                    key = cli_args[i][2:]
-                    if i + 1 < len(cli_args) and not cli_args[i + 1].startswith("--"):
-                        config[key] = cli_args[i + 1]
-                        i += 2
-                    else:
-                        config[key] = True
-                        i += 1
+def _merge_cli_overrides(config, skip_indices):
+    """Scan argv for --key / --key=value and merge into config (later wins).
+
+    Supports CLI flags on either side of the YAML file so that launcher-injected
+    args like `--local_rank=0` (from `deepspeed` launcher) still reach the
+    TrainingArguments dataclass instead of being silently dropped.
+    """
+    argv = sys.argv
+    i = 1
+    while i < len(argv):
+        if i in skip_indices:
+            i += 1
+            continue
+        arg = argv[i]
+        if arg.startswith("--"):
+            body = arg[2:]
+            if "=" in body:
+                key, value = body.split("=", 1)
+                config[key] = value
+                i += 1
+            else:
+                key = body
+                next_idx = i + 1
+                if (next_idx < len(argv)
+                        and next_idx not in skip_indices
+                        and not argv[next_idx].startswith("--")):
+                    config[key] = argv[next_idx]
+                    i += 2
                 else:
+                    config[key] = True
                     i += 1
+        else:
+            i += 1
+    return config
+
+
+def read_args(parser):
+    """Parse arguments from YAML, JSON, or CLI.
+
+    YAML file may appear anywhere in argv (not just argv[1]) so launcher-
+    injected flags don't break detection. Example: `deepspeed script.py
+    --local_rank=0 configs/x.yaml --epochs 5` parses correctly.
+    """
+    yaml_idx = next(
+        (i for i, a in enumerate(sys.argv[1:], 1) if a.endswith((".yaml", ".yml"))),
+        None,
+    )
+    if yaml_idx is not None:
+        with open(sys.argv[yaml_idx]) as f:
+            config = yaml.safe_load(f) or {}
+        config = _merge_cli_overrides(config, skip_indices={0, yaml_idx})
         config = _expand_paths(config)
         config = _coerce_numeric(config)
         return parser.parse_dict(config)
