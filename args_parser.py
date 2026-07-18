@@ -8,6 +8,20 @@ import yaml
 
 _NUM_RE = re.compile(r'^-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$')
 
+_NULL_LITERALS = {"null", "None", "none", ""}
+
+
+def _maybe_null(value):
+    """Convert CLI null literals to Python None to match YAML null semantics.
+
+    Lets users write `--validation_file null` or `--model_name_or_path null`
+    on the command line and get the same behavior as `validation_file: null`
+    in YAML.
+    """
+    if isinstance(value, str) and value in _NULL_LITERALS:
+        return None
+    return value
+
 
 def _coerce_numeric(config):
     """Convert CLI string values that look like numbers to int/float."""
@@ -50,7 +64,7 @@ def _merge_cli_overrides(config, skip_indices):
             body = arg[2:]
             if "=" in body:
                 key, value = body.split("=", 1)
-                config[key] = value
+                config[key] = _maybe_null(value)
                 i += 1
             else:
                 key = body
@@ -58,7 +72,7 @@ def _merge_cli_overrides(config, skip_indices):
                 if (next_idx < len(argv)
                         and next_idx not in skip_indices
                         and not argv[next_idx].startswith("--")):
-                    config[key] = argv[next_idx]
+                    config[key] = _maybe_null(argv[next_idx])
                     i += 2
                 else:
                     config[key] = True
