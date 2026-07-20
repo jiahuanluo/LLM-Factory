@@ -768,18 +768,25 @@ def main():
         probs = scipy.special.softmax(preds, axis=1)
         pred_indices = np.argmax(probs, axis=1)
 
+        # accuracy: 4 类 argmax
         result = {"accuracy": accuracy_score(p.label_ids, pred_indices)}
 
-        try:
-            auc = roc_auc_score(
-                p.label_ids, probs,
-                multi_class="ovr", average="macro",
+        # AUC: 二分类合并 — label 0 为负类，label 1/2/3 合并为正类（概率求和）
+        # 硬编码 4 分类专用逻辑
+        if probs.shape[1] != 4:
+            raise RuntimeError(
+                f"硬编码 4 分类 AUC 需要 4 个类别的概率，但模型输出 {probs.shape[1]} 个。"
+                f"请检查数据 label 是否为 0/1/2/3。"
             )
+        binary_labels = (p.label_ids != 0).astype(int)
+        positive_probs = probs[:, 1:].sum(axis=1)  # label 1/2/3 合并
+        try:
+            auc = roc_auc_score(binary_labels, positive_probs)
             result["auc"] = auc if not np.isnan(auc) else 0.0
         except ValueError as e:
             raise RuntimeError(
-                f"无法计算 AUC (OvR macro): {e}。"
-                f"请检查验证集是否包含全部 {len(label_list)} 个类别样本。"
+                f"无法计算 AUC (label 0 vs 1/2/3 合并): {e}。"
+                f"请检查验证集是否同时包含 label 0 和 label 1/2/3 的样本。"
             ) from e
         return result
 
