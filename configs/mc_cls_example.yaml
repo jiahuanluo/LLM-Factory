@@ -1,0 +1,39 @@
+# 多分类示例（5 类 label: 1-5）
+# 用法：python run_multiclass_classification.py configs/mc_cls_example.yaml
+#
+# 说明：
+#   - eval 每次**同时**输出 accuracy 和 auc（OvR macro），无需 metric_name 二选一
+#   - predict 输出 prediction_label（类别名）+ prediction_prob（对应概率）两列
+#   - label 列写整数 1-5 即可，HF datasets 会自动按 string 排序构造 label2id={"1":0,...,"5":4}
+
+model_name_or_path: bert-base-uncased
+trust_remote_code: false
+
+train_file: data/multiclass/train.csv
+validation_files: data/multiclass/val.csv
+text_column_names: sentence
+
+do_train: true
+do_eval: true
+
+output_dir: tmp/mc_cls_example_out
+save_strategy: epoch
+eval_strategy: epoch
+
+num_train_epochs: 3
+per_device_train_batch_size: 16
+per_device_eval_batch_size: 16
+learning_rate: 2e-5
+weight_decay: 0.01
+
+# 多分类脚本只支持 eval_accuracy / eval_auc（含多验证集前缀 eval_validation_N_*）
+metric_for_best_model: eval_auc
+greater_is_better: true
+load_best_model_at_end: true
+
+fp16: true
+bf16: false
+
+logging_steps: 50
+report_to: []
+seed: 42
