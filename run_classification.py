@@ -29,7 +29,6 @@
 """Finetuning the library models for text classification."""
 # You can also adapt this script on your own text classification task. Pointers for this are left as comments.
 
-import csv
 import logging
 import os
 import random
@@ -959,62 +958,57 @@ def main():
 
     if training_args.do_predict:
         logger.info("*** Predict ***")
-        # Determine columns to exclude from output: text columns + label + 内部 sentence 字段
-        # preprocess_function 会把 text_column_names 内容拷到内部 "sentence" 列，需一并排除
-        exclude_cols = {"label", "sentence"}
+        # 清理列：tokenizer 产物 + preprocess_function 内部 sentence 列 + 原始文本列 + label。
+        # remove_columns 字段在数据加载时已删，这里冗余列出以防遗漏。
+        cols_to_remove = ["input_ids", "token_type_ids", "attention_mask", "sentence", "label"]
         if data_args.text_column_names is not None:
-            exclude_cols.update(c.strip() for c in data_args.text_column_names.split(","))
+            cols_to_remove.extend(c.strip() for c in data_args.text_column_names.split(","))
         if data_args.remove_columns is not None:
-            exclude_cols.update(c.strip() for c in data_args.remove_columns.split(","))
-        # Preprocess tokenizer columns to exclude
-        tokenizer_cols = {"input_ids", "token_type_ids", "attention_mask"}
+            cols_to_remove.extend(c.strip() for c in data_args.remove_columns.split(","))
+        cols_to_remove = list(dict.fromkeys(cols_to_remove))
 
         for split_name, predict_dataset in predict_datasets.items():
-            # Removing the `label` columns if exists because it might contains -1 and Trainer won't like that.
+            # trainer.predict 之前去掉 label，避免 trainer 把 -1 placeholder 收进 label_ids
             if "label" in predict_dataset.features:
                 predict_dataset = predict_dataset.remove_columns("label")
-            # Save original row data (non-tokenizer, non-excluded columns) before prediction
-            all_cols = list(predict_dataset.features.keys())
-            keep_cols = [c for c in all_cols if c not in exclude_cols and c not in tokenizer_cols]
-            rows = [{c: predict_dataset[i][c] for c in keep_cols} for i in range(len(predict_dataset))]
 
             predict_result = trainer.predict(predict_dataset, metric_key_prefix="predict")
             raw_predictions = predict_result.predictions
+
+            existing_cols = list(predict_dataset.features.keys())
+            drop_cols = [c for c in cols_to_remove if c in existing_cols]
+            if drop_cols:
+                predict_dataset = predict_dataset.remove_columns(drop_cols)
+
+            # 用 pandas 写 CSV：trainer.predict 之后 dataset 内部 _data table 可能被切分，
+            # datasets.add_column 的 concat_tables axis=1 会因 row group 对不齐而报错；
+            # to_pandas 走 Arrow 零拷贝，pandas.to_csv 是 C 实现，比 csv.writer 快几倍。
+            import pandas as pd
+            out_df = predict_dataset.to_pandas()
+
             if is_regression:
-                predictions = np.squeeze(raw_predictions)
+                out_df["prediction"] = np.squeeze(raw_predictions)
             elif is_multi_label:
-                predictions = scipy.special.expit(raw_predictions)  # sigmoid probabilities
+                probs = scipy.special.expit(raw_predictions)
+                for i, label in enumerate(label_list):
+                    out_df[f"{label}_prob"] = probs[:, i]
             else:
-                # For binary classification, output probability of positive class (class 1)
-                # For multi-class, output argmax label
                 if raw_predictions.shape[1] == 2:
-                    # Binary: softmax to get probabilities, output class 1 probability
                     probs = scipy.special.softmax(raw_predictions, axis=1)
-                    predictions = probs[:, 1]
+                    out_df["prediction"] = probs[:, 1]
                 else:
-                    predictions = np.argmax(raw_predictions, axis=1)
-            # Output filename: single test -> predict_results.csv, multiple -> predict_results_test_N.csv
+                    probs = scipy.special.softmax(raw_predictions, axis=1)
+                    pred_indices = np.argmax(probs, axis=1)
+                    out_df["prediction_label"] = [label_list[i] for i in pred_indices]
+                    out_df["prediction_prob"] = probs[np.arange(len(pred_indices)), pred_indices]
+
             if len(predict_datasets) == 1:
                 output_predict_file = os.path.join(training_args.output_dir, "predict_results.csv")
             else:
                 output_predict_file = os.path.join(training_args.output_dir, f"predict_results_{split_name}.csv")
             if trainer.is_world_process_zero():
-                with open(output_predict_file, "w", newline="") as f:
-                    logger.info(f"***** Predict results for {split_name} *****")
-                    writer = csv.writer(f)
-                    writer.writerow(keep_cols + ["prediction"])
-                    for index, item in enumerate(predictions):
-                        row = [rows[index][c] for c in keep_cols]
-                        if is_regression:
-                            row.append(f"{item:3.3f}")
-                        elif is_multi_label:
-                            probs = {label_list[i]: f"{item[i]:.6f}" for i in range(len(item))}
-                            row.append(str(probs))
-                        elif raw_predictions.shape[1] == 2:
-                            row.append(f"{item:.6f}")
-                        else:
-                            row.append(label_list[item])
-                        writer.writerow(row)
+                logger.info(f"***** Predict results for {split_name} *****")
+                out_df.to_csv(output_predict_file, index=False)
             logger.info(f"Predict results saved at {output_predict_file}")
     kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "text-classification"}
 
