@@ -1,0 +1,32 @@
+pretrain_samples:
+  - data/pbc/processed/samples_train.pkl
+  - data/pbc/processed/samples_val.pkl
+  - data/pbc/processed/samples_test_unlabeled.pkl
+cat_vocab: data/pbc/processed/cat_vocab.json
+
+output_dir: output/pbc_pretrained
+
+epochs: 2
+batch_size: 8
+lr: 1.0e-4
+weight_decay: 0.01
+mask_ratio: 0.15
+mlm_weight: 1.0
+struct_weight: 1.0
+
+d: 128
+n_heads: 4
+n_layers: 2
+dropout: 0.1
+
+# text 分支（联合预训练开关）
+use_text_branch: true
+text_encoder_name: models/gte-new
+text_hidden_size: 1024
+text_vocab_size: 30528
+text_max_len: 512
+
+num_workers: 0
+log_every: 20
+save_every_epochs: 1
+seed: 42

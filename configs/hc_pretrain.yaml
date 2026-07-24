@@ -1,0 +1,24 @@
+pretrain_samples:
+  - data/home-credit/processed/samples_train.pkl
+  - data/home-credit/processed/samples_val.pkl
+  - data/home-credit/processed/samples_test_unlabeled.pkl
+cat_vocab:     data/home-credit/processed/cat_vocab.json
+
+output_dir: output/hc_pretrained
+
+epochs: 2
+batch_size: 64
+lr: 1.0e-4
+weight_decay: 0.01
+mask_ratio: 0.15
+
+d: 128
+n_heads: 4
+n_layers: 2
+dropout: 0.1
+text_vocab_size: 30522
+
+num_workers: 0  # avoid fork-bomb memory blowup; data loading is not the bottleneck
+log_every: 50
+save_every_epochs: 1
+seed: 42

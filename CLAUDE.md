@@ -4,7 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-基于 HuggingFace Transformers 的 LLM 训练工具集，包含两个独立训练脚本：分类微调和掩码语言模型继续预训练。均改编自 Transformers 官方示例。无测试套件，无 CI/CD。
+基于 HuggingFace Transformers 的 LLM 训练工具集，包含两个独立训练脚本：分类微调和掩码语言模型继续预训练。均改编自 Transformers 官方示例。
+
+**新增**：`src/pbc_credit/` 模块 — 度小满 Model 1 多模态架构在央行二代征信（CrisPbc.json）上的实现。5 模态（User/Summary/Accounts×5/Queries/Publics）+ 3 交互对，无 tokenizer 依赖，可直接搬到生产处理真实 JSON 报告。详见 `data/home-credit/个人征信/CLAUDE.md` 和 `.omc/autopilot/spec.md`。
+
+## 模块清单
+
+| 模块 | 路径 | 用途 |
+|---|---|---|
+| 文本分类微调 | `run_classification.py` | 单标签/多标签/回归，sklearn 评估 |
+| MLM 继续预训练 | `run_mlm.py` | BERT/RoBERTa/ALBERT 等 |
+| Home Credit Model 1 | `src/home_credit/` | 多模态风控（CSV 输入） |
+| PBC 征信 Model 1 | `src/pbc_credit/` | 多模态风控（JSON 报告输入，5 模态） |
 
 ## 功能概览
 
@@ -91,6 +102,20 @@ pip install -r requirements.txt
 python setup_claude.py --dry-run  # 预览
 python setup_claude.py            # 执行
 ```
+
+### HuggingFace 模型下载
+
+当前环境无法直连 `huggingface.co`，必须走 [hf-mirror.com](https://hf-mirror.com) 镜像：
+
+```bash
+# 方式 1：设环境变量后用 huggingface_hub / from_pretrained 自动走镜像
+export HF_ENDPOINT=https://hf-mirror.com
+
+# 方式 2：直接 curl 下载单文件（可跳过权重，只取 config + tokenizer + modeling 代码）
+curl -sSL -o models/<model>/config.json https://hf-mirror.com/<repo>/resolve/main/config.json
+```
+
+例如 `models/neobert/` 就是从 `chandar-lab/NeoBERT` 用方式 2 下载的（跳过了 `model.safetensors` 权重，只跑从头训练）。
 
 ## 训练脚本
 

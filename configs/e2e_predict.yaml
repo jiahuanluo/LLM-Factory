@@ -1,0 +1,12 @@
+# E2E 场景 2: predict-only（复用场景 1 的 output/e2e_bin）
+model_name_or_path: output/e2e_bin
+test_file: data/e2e/bin_test.csv
+text_column_names: sentence
+output_dir: output/e2e_predict
+do_predict: true
+do_train: false
+do_eval: false
+per_device_eval_batch_size: 16
+max_seq_length: 64
+trust_remote_code: true
+report_to: none

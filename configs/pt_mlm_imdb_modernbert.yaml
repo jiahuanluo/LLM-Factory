@@ -1,0 +1,39 @@
+# IMDB MLM 从头预训练 - ModernBERT (本地 fork，绕开 transformers 自带)
+# Mini 验证版：3 epoch，max_seq 512
+
+model_name_or_path: null
+config_name: models/modernbert
+tokenizer_name: models/modernbert
+trust_remote_code: true
+
+train_file: data/imdb/pretrain_corpus.txt
+validation_file: data/imdb/val_corpus.txt
+
+line_by_line: false
+max_seq_length: 512
+mlm_probability: 0.15
+pad_to_max_length: true
+
+do_train: true
+do_eval: true
+
+output_dir: tmp/imdb_mlm_modernbert_out
+save_strategy: epoch
+eval_strategy: epoch
+
+num_train_epochs: 3
+per_device_train_batch_size: 8
+per_device_eval_batch_size: 8
+gradient_accumulation_steps: 2
+learning_rate: 1e-4
+warmup_ratio: 0.05
+weight_decay: 0.01
+max_grad_norm: 1.0
+
+fp16: true
+bf16: false
+
+logging_steps: 50
+logging_first_step: true
+report_to: []
+seed: 42

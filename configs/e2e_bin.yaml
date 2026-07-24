@@ -1,0 +1,23 @@
+# E2E 场景 1: 二分类 train + eval（toy 数据，最小 epoch）
+model_name_or_path: bert-base-uncased
+train_file: data/e2e/bin_train.csv
+validation_files: data/e2e/bin_val_a.csv
+text_column_names: sentence
+output_dir: output/e2e_bin
+do_train: true
+do_eval: true
+do_predict: false
+learning_rate: 2e-5
+num_train_epochs: 1
+per_device_train_batch_size: 8
+per_device_eval_batch_size: 16
+max_seq_length: 64
+metric_name: auc
+eval_strategy: epoch
+save_strategy: "no"
+load_best_model_at_end: false
+fp16: false
+report_to: none
+ignore_mismatched_sizes: true
+trust_remote_code: true
+seed: 42

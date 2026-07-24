@@ -1,0 +1,23 @@
+train_samples: data/home-credit/processed/samples_train.pkl
+val_samples:   data/home-credit/processed/samples_val.pkl
+cat_vocab:     data/home-credit/processed/cat_vocab.json
+init_from_pretrain: output/hc_pretrained/encoder_state.pt
+
+output_dir: output/hc_finetuned
+
+epochs: 5
+batch_size: 64
+lr: 5.0e-5
+weight_decay: 0.01
+pos_weight: 11.4
+
+d: 128
+n_heads: 4
+n_layers: 2
+dropout: 0.1
+text_vocab_size: 30522
+
+num_workers: 0  # avoid fork-bomb memory blowup
+log_every: 50
+eval_per_epoch_steps: 2000
+seed: 42
