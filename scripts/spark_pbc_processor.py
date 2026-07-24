@@ -1,12 +1,12 @@
-"""Spark PBC 处理作业 — vocab 已预生成，单脚本 spark-submit 即可。
+"""Spark PBC 处理作业 — vocab 已预生成，DataFrame API + spark-submit 直接执行。
 
 依赖：
   - pyspark 3.x
   - Python 3.8+
-  - cat_vocab.json（预先用本地 build-cat-vocab 离线构建并上传 HDFS）
+  - cat_vocab.json（已在仓库 data/pbc/processed/ 下，生产端上传到 HDFS）
 
 ============================================================
-  生产用法（spark-submit）
+  生产用法 1：spark-submit 直接执行（推荐）
 ============================================================
 spark-submit \\
     --files /hdfs/path/cat_vocab.json \\
@@ -18,23 +18,18 @@ spark-submit \\
     [--text-column pbc_text]
 
 ============================================================
-  PySpark 交互用法
+  生产用法 2：PySpark 交互式 import
 ============================================================
-from pyspark.sql import SparkSession
-import spark_pbc_processor as p
+from pyspark.sql.functions import udf, col
+from pyspark.sql.types import StringType
+from spark_pbc_processor import parse_report_to_struct_json, load_vocab_broadcast
 
-spark = SparkSession.builder.appName('pbc').getOrCreate()
-vocab_bc = p.load_vocab_broadcast(spark, '/hdfs/path/cat_vocab.json')
-p.register_udfs(spark, vocab_bc)
+vocab_bc = load_vocab_broadcast(spark, '/hdfs/path/cat_vocab.json')
+parse_udf = udf(lambda s: parse_report_to_struct_json(s, vocab_bc.value), StringType())
 
-spark.sql('''
-    INSERT INTO pbc_reports
-    SELECT
-        report_id,
-        pbc_text,                                   -- 已有列透传
-        parse_pbc(report_json) AS pbc_struct        -- 新加
-    FROM raw_pbc_reports
-''')
+df = spark.read.table('raw_pbc_reports')
+df = df.withColumn('pbc_struct', parse_udf(col('report_json')))
+df.write.insertInto('pbc_reports')
 """
 from __future__ import annotations
 
@@ -43,7 +38,6 @@ import datetime
 import json
 import math
 import sys
-from typing import Any
 
 
 # ============================================================
@@ -229,7 +223,7 @@ def _tame(v: float) -> float:
 
 
 # ============================================================
-# 三、Vocab 编码（vocab 本身已预生成，这里只是查表）
+# 三、Vocab 查表（vocab 文件预生成，这里只读）
 # ============================================================
 
 def load_vocab(path: str) -> dict:
@@ -264,7 +258,7 @@ def build_user(report: dict, ref: datetime.datetime) -> dict:
     residences = get_path(report, 'personInfo.residences', []) or []
     professionals = get_path(report, 'personInfo.professionals', []) or []
     marriage = get_path(report, 'personInfo.marriage', {}) or {}
-    identity_others = get_path(report, 'header.identityOthers', []) or []
+    identity_others = get_path(report, 'header.identityOthers', []) or {}
 
     dob = parse_date(identity.get('pb01ar01'))
     age = years_since(dob, ref) if dob else None
@@ -526,6 +520,8 @@ def parse_report_to_struct_json(report_json_str: str, vocab: dict) -> str:
     """Spark UDF 主函数：JSON 字符串 → pbc_struct JSON 字符串。
 
     单条失败不拖死 Spark job：异常时返回 {"_error": "...", "report_id": "..."}。
+    生产端可直接 udf 注册：
+        parse_udf = udf(lambda s: parse_report_to_struct_json(s, vocab_bc.value), StringType())
     """
     if report_json_str is None:
         return None
@@ -541,61 +537,51 @@ def parse_report_to_struct_json(report_json_str: str, vocab: dict) -> str:
 
 
 # ============================================================
-# 六、Spark 集成
+# 六、Spark 作业（DataFrame API，main 入口直接执行）
 # ============================================================
-
-def register_udfs(spark, vocab_bc):
-    """注册 parse_pbc UDF 到 SparkSession。
-
-    用法：
-      spark.sql("SELECT report_id, parse_pbc(report_json) AS pbc_struct FROM raw")
-    """
-    def _udf(report_json_str):
-        if report_json_str is None:
-            return None
-        return parse_report_to_struct_json(report_json_str, vocab_bc.value)
-    spark.udf.register('parse_pbc', _udf)
-    return _udf
-
 
 def run_job(spark, input_table: str, input_column: str,
-            output_table: str, vocab_bc, text_column: str = None):
-    """完整 Spark 作业：读原始 JSON 列 → 产 pbc_struct → 写新表。
+            output_table: str, vocab_path: str, text_column: str = None):
+    """读原始表 → 加 pbc_struct 列 → 写新表（DataFrame API）。
 
     Args:
-        input_table: 原始表名（含 report_json 列）
+        input_table: 原始表名（含 JSON 列 + 可选 report_id / pbc_text）
         input_column: JSON 列名
         output_table: 目标表名
-        vocab_bc: Spark broadcast 的 vocab
-        text_column: 已有 pbc_text 列名（透传），None 时不 SELECT
+        vocab_path: cat_vocab.json 路径
+        text_column: 已有 pbc_text 列名（透传），None 时不带
     """
-    register_udfs(spark, vocab_bc)
+    from pyspark.sql.functions import udf, col
+    from pyspark.sql.types import StringType
 
-    select_cols = ['report_id']
-    if text_column:
+    vocab_bc = load_vocab_broadcast(spark, vocab_path)
+    parse_udf = udf(
+        lambda s: parse_report_to_struct_json(s, vocab_bc.value),
+        StringType(),
+    )
+
+    df = spark.read.table(input_table)
+    df = df.withColumn('pbc_struct', parse_udf(col(input_column)))
+
+    # 选择输出列：report_id + 可选 pbc_text + pbc_struct
+    select_cols = []
+    if 'report_id' in df.columns:
+        select_cols.append('report_id')
+    if text_column and text_column in df.columns:
         select_cols.append(text_column)
-    select_cols.append(f'parse_pbc({input_column}) AS pbc_struct')
+    select_cols.append('pbc_struct')
 
-    sql = f"""
-        INSERT INTO {output_table}
-        SELECT {', '.join(select_cols)}
-        FROM {input_table}
-    """
-    print(f'Running SQL:\n{sql}', flush=True)
-    spark.sql(sql)
+    print(f'Writing columns: {select_cols}', flush=True)
+    df.select(*select_cols).write.insertInto(output_table)
 
-
-# ============================================================
-# 七、main（spark-submit 入口）
-# ============================================================
 
 def main():
-    parser = argparse.ArgumentParser(description='Spark PBC 处理作业')
+    parser = argparse.ArgumentParser(description='Spark PBC 处理作业（DataFrame API）')
     parser.add_argument('--input-table', required=True, help='原始表名（含 JSON 列）')
     parser.add_argument('--input-column', default='report_json', help='JSON 列名')
     parser.add_argument('--output-table', required=True, help='目标表名')
     parser.add_argument('--vocab-path', required=True,
-                        help='cat_vocab.json 路径（本地或 HDFS）')
+                        help='cat_vocab.json 路径（本地或 HDFS，配合 --files 分发）')
     parser.add_argument('--text-column', default=None,
                         help='已有 pbc_text 列名（透传到输出表）')
     args = parser.parse_args()
@@ -603,13 +589,12 @@ def main():
     from pyspark.sql import SparkSession
     spark = SparkSession.builder.appName('pbc-struct-parse').getOrCreate()
 
-    vocab_bc = load_vocab_broadcast(spark, args.vocab_path)
     run_job(
         spark=spark,
         input_table=args.input_table,
         input_column=args.input_column,
         output_table=args.output_table,
-        vocab_bc=vocab_bc,
+        vocab_path=args.vocab_path,
         text_column=args.text_column,
     )
     spark.stop()
