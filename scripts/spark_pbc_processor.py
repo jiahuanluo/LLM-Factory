@@ -1,43 +1,36 @@
-"""Spark PBC 处理作业 — vocab 已预生成，DataFrame API + spark-submit 直接执行。
+"""PBC Spark 处理脚本 — PySpark 交互式执行，全流程在单脚本内。
 
-依赖：
-  - pyspark 3.x
-  - Python 3.8+
-  - cat_vocab.json（已在仓库 data/pbc/processed/ 下，生产端上传到 HDFS）
+顶部配置常量 → 加载 vocab → Spark 读表 → withColumn 产 pbc_struct → 写新表。
 
 ============================================================
-  生产用法 1：spark-submit 直接执行（推荐）
+  用法（二选一）
 ============================================================
-spark-submit \\
-    --files /hdfs/path/cat_vocab.json \\
-    spark_pbc_processor.py \\
-    --input-table raw_pbc_reports \\
-    --input-column report_json \\
-    --output-table pbc_reports \\
-    --vocab-path cat_vocab.json \\
-    [--text-column pbc_text]
+1. spark-submit 直接执行（先改顶部配置常量）：
+     spark-submit --files /path/to/cat_vocab.json spark_pbc_processor.py
 
-============================================================
-  生产用法 2：PySpark 交互式 import
-============================================================
-from pyspark.sql.functions import udf, col
-from pyspark.sql.types import StringType
-from spark_pbc_processor import parse_report_to_struct_json, load_vocab_broadcast
+2. PySpark / Notebook 交互（exec 整个脚本）：
+     spark  # 已有的 SparkSession
+     exec(open('spark_pbc_processor.py').read())
 
-vocab_bc = load_vocab_broadcast(spark, '/hdfs/path/cat_vocab.json')
-parse_udf = udf(lambda s: parse_report_to_struct_json(s, vocab_bc.value), StringType())
-
-df = spark.read.table('raw_pbc_reports')
-df = df.withColumn('pbc_struct', parse_udf(col('report_json')))
-df.write.insertInto('pbc_reports')
+   或 notebook 里 %run spark_pbc_processor.py
 """
 from __future__ import annotations
 
-import argparse
 import datetime
 import json
 import math
-import sys
+
+
+# ============================================================
+# 配置常量（按生产环境修改）
+# ============================================================
+
+INPUT_TABLE = 'raw_pbc_reports'      # 原始表名（含 JSON 列）
+INPUT_COLUMN = 'report_json'         # JSON 字符串列名
+OUTPUT_TABLE = 'pbc_reports'         # 目标表名（含 pbc_struct STRING 列）
+TEXT_COLUMN = 'pbc_text'             # 已有 pbc_text 列名（透传）；设 None 不带
+VOCAB_PATH = 'cat_vocab.json'        # vocab 路径（配合 --files 分发到 executor）
+APP_NAME = 'pbc-struct-parse'
 
 
 # ============================================================
@@ -223,19 +216,13 @@ def _tame(v: float) -> float:
 
 
 # ============================================================
-# 三、Vocab 查表（vocab 文件预生成，这里只读）
+# 三、Vocab 查表
 # ============================================================
 
 def load_vocab(path: str) -> dict:
-    """从本地或 HDFS 路径加载 cat_vocab.json。"""
+    """从本地或 executor 分发路径加载 cat_vocab.json。"""
     with open(path, encoding='utf-8') as f:
         return json.load(f)
-
-
-def load_vocab_broadcast(spark, vocab_path: str):
-    """Spark broadcast vocab（executor 共享一份，避免每条记录都加载）。"""
-    vocab = load_vocab(vocab_path)
-    return spark.sparkContext.broadcast(vocab)
 
 
 def encode_value(branch: str, table: str, value, vocab: dict) -> int:
@@ -456,7 +443,6 @@ def build_sample(report: dict, vocab: dict) -> dict:
     ref = _report_ref_date(report)
     sample = {}
 
-    # user
     u = build_user(report, ref)
     sample['user_numeric'] = u['numeric']
     sample['user_cat_ids'] = [
@@ -465,7 +451,6 @@ def build_sample(report: dict, vocab: dict) -> dict:
     ]
     sample['user_cat_mask'] = u['cat_mask']
 
-    # summary
     s = build_summary(report)
     sample['summary_numeric'] = s['numeric']
     summary_tables = [t for _n, _l, _nf, cf in SUMMARY_TABLES for _f, t in cf]
@@ -475,7 +460,6 @@ def build_sample(report: dict, vocab: dict) -> dict:
     ]
     sample['summary_cat_mask'] = s['cat_mask']
 
-    # accounts
     acc_tables = [t for _f, t in ACCOUNT_CAT_FIELDS]
     accounts = build_accounts(report)
     for ty in ACCOUNT_TYPES:
@@ -491,7 +475,6 @@ def build_sample(report: dict, vocab: dict) -> dict:
         sample[f'{k}_paystate'] = a['paystate']
         sample[f'{k}_mask'] = a['mask']
 
-    # queries
     q = build_queries(report, ref)
     q_tables = [t for _f, t in QUERY_CAT_FIELDS]
     sample['query_numeric'] = q['numeric']
@@ -503,7 +486,6 @@ def build_sample(report: dict, vocab: dict) -> dict:
     sample['query_cat_mask'] = q['cat_mask']
     sample['query_mask'] = [1] * len(q['numeric'])
 
-    # publics
     p = build_publics(report, ref)
     sample['public_numeric'] = p['numeric']
     sample['public_cat_ids'] = [
@@ -517,11 +499,9 @@ def build_sample(report: dict, vocab: dict) -> dict:
 
 
 def parse_report_to_struct_json(report_json_str: str, vocab: dict) -> str:
-    """Spark UDF 主函数：JSON 字符串 → pbc_struct JSON 字符串。
+    """JSON 字符串 → pbc_struct JSON 字符串。
 
     单条失败不拖死 Spark job：异常时返回 {"_error": "...", "report_id": "..."}。
-    生产端可直接 udf 注册：
-        parse_udf = udf(lambda s: parse_report_to_struct_json(s, vocab_bc.value), StringType())
     """
     if report_json_str is None:
         return None
@@ -537,68 +517,44 @@ def parse_report_to_struct_json(report_json_str: str, vocab: dict) -> str:
 
 
 # ============================================================
-# 六、Spark 作业（DataFrame API，main 入口直接执行）
+# 六、Spark 执行（加载 vocab → 读表 → 加 pbc_struct → 写表）
 # ============================================================
 
-def run_job(spark, input_table: str, input_column: str,
-            output_table: str, vocab_path: str, text_column: str = None):
-    """读原始表 → 加 pbc_struct 列 → 写新表（DataFrame API）。
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import udf, col
+from pyspark.sql.types import StringType
 
-    Args:
-        input_table: 原始表名（含 JSON 列 + 可选 report_id / pbc_text）
-        input_column: JSON 列名
-        output_table: 目标表名
-        vocab_path: cat_vocab.json 路径
-        text_column: 已有 pbc_text 列名（透传），None 时不带
-    """
-    from pyspark.sql.functions import udf, col
-    from pyspark.sql.types import StringType
+# 复用已有 SparkSession（notebook 交互）；没有则新建
+try:
+    spark
+except NameError:
+    spark = SparkSession.builder.appName(APP_NAME).getOrCreate()
 
-    vocab_bc = load_vocab_broadcast(spark, vocab_path)
-    parse_udf = udf(
-        lambda s: parse_report_to_struct_json(s, vocab_bc.value),
-        StringType(),
-    )
+# vocab broadcast（executor 共享）
+_vocab = load_vocab(VOCAB_PATH)
+vocab_bc = spark.sparkContext.broadcast(_vocab)
+print(f'loaded vocab from {VOCAB_PATH}: '
+      f'{sum(len(t) for b in _vocab.values() for t in (b.values() if isinstance(b, dict) else [b]))} entries',
+      flush=True)
 
-    df = spark.read.table(input_table)
-    df = df.withColumn('pbc_struct', parse_udf(col(input_column)))
+# UDF（闭包取 broadcast 的值）
+parse_udf = udf(
+    lambda s: parse_report_to_struct_json(s, vocab_bc.value),
+    StringType(),
+)
 
-    # 选择输出列：report_id + 可选 pbc_text + pbc_struct
-    select_cols = []
-    if 'report_id' in df.columns:
-        select_cols.append('report_id')
-    if text_column and text_column in df.columns:
-        select_cols.append(text_column)
-    select_cols.append('pbc_struct')
+# 读 → 加 pbc_struct 列 → 写
+df = spark.read.table(INPUT_TABLE)
+df = df.withColumn('pbc_struct', parse_udf(col(INPUT_COLUMN)))
 
-    print(f'Writing columns: {select_cols}', flush=True)
-    df.select(*select_cols).write.insertInto(output_table)
+# 输出列：report_id（如果有）+ 可选 pbc_text + pbc_struct
+select_cols = []
+if 'report_id' in df.columns:
+    select_cols.append('report_id')
+if TEXT_COLUMN and TEXT_COLUMN in df.columns:
+    select_cols.append(TEXT_COLUMN)
+select_cols.append('pbc_struct')
 
-
-def main():
-    parser = argparse.ArgumentParser(description='Spark PBC 处理作业（DataFrame API）')
-    parser.add_argument('--input-table', required=True, help='原始表名（含 JSON 列）')
-    parser.add_argument('--input-column', default='report_json', help='JSON 列名')
-    parser.add_argument('--output-table', required=True, help='目标表名')
-    parser.add_argument('--vocab-path', required=True,
-                        help='cat_vocab.json 路径（本地或 HDFS，配合 --files 分发）')
-    parser.add_argument('--text-column', default=None,
-                        help='已有 pbc_text 列名（透传到输出表）')
-    args = parser.parse_args()
-
-    from pyspark.sql import SparkSession
-    spark = SparkSession.builder.appName('pbc-struct-parse').getOrCreate()
-
-    run_job(
-        spark=spark,
-        input_table=args.input_table,
-        input_column=args.input_column,
-        output_table=args.output_table,
-        vocab_path=args.vocab_path,
-        text_column=args.text_column,
-    )
-    spark.stop()
-
-
-if __name__ == '__main__':
-    main()
+print(f'Writing {select_cols} → {OUTPUT_TABLE}', flush=True)
+df.select(*select_cols).write.insertInto(OUTPUT_TABLE)
+print('done.', flush=True)
