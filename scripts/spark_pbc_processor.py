@@ -1,32 +1,40 @@
-"""Spark PBC 处理作业 — 独立文件，无项目内 import 依赖。
+"""Spark PBC 处理作业 — vocab 已预生成，单脚本 spark-submit 即可。
 
-把这个文件直接扔到 Spark 集群即可运行。依赖：
+依赖：
   - pyspark 3.x
   - Python 3.8+
-  - openpyxl（构建 vocab 时用，运行时不需要）
+  - cat_vocab.json（预先用本地 build-cat-vocab 离线构建并上传 HDFS）
 
 ============================================================
-  生产部署流程
+  生产用法（spark-submit）
 ============================================================
-1. 首次构建 cat_vocab.json（离线一次性）：
-     python spark_pbc_processor.py build-vocab \
-         --codetable 个人征信码值表.xlsx \
-         --output /hdfs/path/cat_vocab.json
+spark-submit \\
+    --files /hdfs/path/cat_vocab.json \\
+    spark_pbc_processor.py \\
+    --input-table raw_pbc_reports \\
+    --input-column report_json \\
+    --output-table pbc_reports \\
+    --vocab-path cat_vocab.json \\
+    [--text-column pbc_text]
 
-2. spark-submit 提交：
-     spark-submit \
-         --files /hdfs/path/cat_vocab.json \
-         spark_pbc_processor.py run-spark \
-         --input-table raw_pbc_reports \
-         --input-column report_json \
-         --output-table pbc_reports \
-         --vocab-path cat_vocab.json
+============================================================
+  PySpark 交互用法
+============================================================
+from pyspark.sql import SparkSession
+import spark_pbc_processor as p
 
-3. 或在 PySpark 交互环境直接用：
-     from spark_pbc_processor import build_vocab_broadcast, parse_report_to_struct_json
-     vocab_bc = build_vocab_broadcast(spark, '/hdfs/path/cat_vocab.json')
-     parse_udf = spark.udf.register('parse_pbc', lambda s: parse_report_to_struct_json(s, vocab_bc.value))
-     spark.sql("INSERT INTO pbc_reports SELECT report_id, pbc_text, parse_pbc(report_json) AS pbc_struct FROM raw_pbc_reports")
+spark = SparkSession.builder.appName('pbc').getOrCreate()
+vocab_bc = p.load_vocab_broadcast(spark, '/hdfs/path/cat_vocab.json')
+p.register_udfs(spark, vocab_bc)
+
+spark.sql('''
+    INSERT INTO pbc_reports
+    SELECT
+        report_id,
+        pbc_text,                                   -- 已有列透传
+        parse_pbc(report_json) AS pbc_struct        -- 新加
+    FROM raw_pbc_reports
+''')
 """
 from __future__ import annotations
 
@@ -42,10 +50,8 @@ from typing import Any
 # 一、字段定义（与 src/pbc_credit/fields.py 同步）
 # ============================================================
 
-# 账户类型（pd01ad01 取值）
 ACCOUNT_TYPES = ['D1', 'R1', 'R2', 'R3', 'R4']
 
-# 60 月还款状态字母表
 PAYSTATE_VOCAB = {
     '<PAD>': 0, '<UNK>': 1,
     '#': 2, '*': 3, 'M': 4,
@@ -53,8 +59,6 @@ PAYSTATE_VOCAB = {
     'B': 12, 'C': 13, 'G': 14, 'D': 15, 'Z': 16, 'N': 17, 'A': 18, 'E': 19,
 }
 
-# User 分支（个人信息，固定维度）
-# (json_path, code_table_name)；table=None 表示纯数值字段
 USER_CAT_FIELDS = [
     ('personInfo.identity.pb01ad01', '性别代码表'),
     ('personInfo.identity.pb01ad02', '学历代码表'),
@@ -69,14 +73,6 @@ USER_CAT_FIELDS = [
     ('personInfo.residences.0.pb030d01', '居住状况代码表'),
 ]
 
-USER_NUMERIC_SPECS = [
-    'age_years', 'num_mobiles', 'num_residences', 'num_professionals',
-    'has_marriage', 'years_since_oldest_mobile', 'years_since_latest_mobile',
-    'years_current_employer', 'has_email', 'num_identity_other_docs',
-]
-
-# Summary 分支（13 张概要子表聚合）
-# (子表名, 是否 list, 数值字段列表, [(枚举字段, 码值表名)])
 SUMMARY_TABLES = [
     ('tradeTips', True,
      ['pc02as01', 'pc02as03'],
@@ -123,7 +119,6 @@ SUMMARY_TABLES = [
      []),
 ]
 
-# Account 分支
 ACCOUNT_CAT_FIELDS = [
     ('pd01ad01', '个人借贷账户类型代码表'),
     ('pd01ad02', '个人借贷交易业务种类代码表'),
@@ -137,14 +132,11 @@ ACCOUNT_NUMERIC_FIELDS = [
     'pd01aj04', 'pd01as01', 'pd01bj01', 'pd01bj02',
 ]
 
-# Query 分支
 QUERY_CAT_FIELDS = [
     ('ph010d01', '机构类型代码'),
     ('ph010q03', '查询原因代码表'),
 ]
-QUERY_NUMERIC_FIELDS = ['ph010r01_days_ago']  # 计算字段
 
-# Public 分支
 PUBLIC_TYPES = [
     ('pco_pf01', 'taxes'),
     ('pco_pf02', 'judgments'),
@@ -210,7 +202,7 @@ def days_since(dt, ref=None):
 
 
 def _report_ref_date(report: dict) -> datetime.datetime:
-    """从报告 header 提参考日期（不硬编码，生产关键）。"""
+    """从报告 header 提参考日期（生产关键：不硬编码）。"""
     for path in ('tranDate', 'reportTime', 'header.request.tranDate'):
         dt = parse_date(get_path(report, path))
         if dt:
@@ -237,82 +229,23 @@ def _tame(v: float) -> float:
 
 
 # ============================================================
-# 三、Vocab（码值表 → id 映射）
+# 三、Vocab 编码（vocab 本身已预生成，这里只是查表）
 # ============================================================
 
-def build_vocab_from_codetable(xlsx_path: str) -> dict:
-    """从 个人征信码值表.xlsx 构建 {码值表名: {code: id}}。"""
-    try:
-        import openpyxl
-    except ImportError as e:
-        raise ImportError("构建 vocab 需要 openpyxl: pip install openpyxl") from e
-
-    wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
-    ws = wb[wb.sheetnames[0]]
-    tables = {}
-    for row in ws.iter_rows(values_only=True):
-        if not row or row[0] is None:
-            continue
-        name = str(row[0]).strip()
-        if name in ('关键字',):
-            continue
-        code = row[1]
-        if code is None:
-            continue
-        code = str(code).strip()
-        tables.setdefault(name, {}).setdefault('<UNK>', 0)
-        if code not in tables[name]:
-            tables[name][code] = len(tables[name])
-    return tables
-
-
-def _collect_used_tables() -> dict:
-    """收集代码中用到的码值表名，按分支分组。"""
-    used = {'user': [], 'summary': [], 'account': [], 'query': []}
-    for _p, t in USER_CAT_FIELDS:
-        if t:
-            used['user'].append(t)
-    for _n, _l, _nf, cats in SUMMARY_TABLES:
-        for _f, t in cats:
-            if t:
-                used['summary'].append(t)
-    for _f, t in ACCOUNT_CAT_FIELDS:
-        if t:
-            used['account'].append(t)
-    for _f, t in QUERY_CAT_FIELDS:
-        if t:
-            used['query'].append(t)
-    return used
-
-
-def build_cat_vocab(xlsx_path: str) -> dict:
-    """构建完整 cat_vocab（含 paystate / public_type 特殊 vocab）。"""
-    tables = build_vocab_from_codetable(xlsx_path)
-    used = _collect_used_tables()
-    vocab = {}
-    for branch, names in used.items():
-        vocab[branch] = {}
-        for name in names:
-            vocab[branch][name] = tables.get(name, {'<UNK>': 0})
-    vocab['paystate'] = {'<all>': PAYSTATE_VOCAB}
-    vocab['public_type'] = {'<all>': PUBLIC_TYPE_VOCAB}
-    return vocab
-
-
 def load_vocab(path: str) -> dict:
+    """从本地或 HDFS 路径加载 cat_vocab.json。"""
     with open(path, encoding='utf-8') as f:
         return json.load(f)
 
 
-def save_vocab(vocab: dict, path: str):
-    import os
-    os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
-    with open(path, 'w', encoding='utf-8') as f:
-        json.dump(vocab, f, ensure_ascii=False, indent=2)
+def load_vocab_broadcast(spark, vocab_path: str):
+    """Spark broadcast vocab（executor 共享一份，避免每条记录都加载）。"""
+    vocab = load_vocab(vocab_path)
+    return spark.sparkContext.broadcast(vocab)
 
 
 def encode_value(branch: str, table: str, value, vocab: dict) -> int:
-    """码值编码成 id；空值/未知都返回 0。"""
+    """码值编码成 id；空值/未知都返回 0 (<UNK>)。"""
     if value is None or value == '':
         return 0
     if branch in ('paystate', 'public_type'):
@@ -326,7 +259,6 @@ def encode_value(branch: str, table: str, value, vocab: dict) -> int:
 # ============================================================
 
 def build_user(report: dict, ref: datetime.datetime) -> dict:
-    """user 分支：10 numeric + 11 cat。"""
     identity = get_path(report, 'personInfo.identity', {}) or {}
     mobiles = get_path(report, 'personInfo.identity.mobiles', []) or []
     residences = get_path(report, 'personInfo.residences', []) or []
@@ -367,7 +299,6 @@ def build_user(report: dict, ref: datetime.datetime) -> dict:
         1.0 if identity.get('pb01aq01') else 0.0,
         float(len(identity_others)),
     ]
-    # nan → 0
     numeric = [0.0 if (isinstance(x, float) and x != x) else x for x in numeric]
 
     cat_values = [get_path(report, path) for path, _t in USER_CAT_FIELDS]
@@ -376,7 +307,6 @@ def build_user(report: dict, ref: datetime.datetime) -> dict:
 
 
 def build_summary(report: dict) -> dict:
-    """summary 分支：13 张概要子表聚合。"""
     sinfo = get_path(report, 'summaryInfo', {}) or {}
     nums, cats, cmask = [], [], []
 
@@ -410,7 +340,7 @@ def build_summary(report: dict) -> dict:
 
 
 def _parse_paystate_to_60(report_account: dict) -> list:
-    """从 latest5year 或 latest24PayState 提取 60 月 id 序列。"""
+    """从 latest5year / latest24PayState 提取 60 月 id 序列。"""
     det = get_path(report_account, 'latest5year.latest5yearDetails')
     if det and isinstance(det, list) and len(det) > 0:
         states = []
@@ -433,7 +363,6 @@ def _parse_paystate_to_60(report_account: dict) -> list:
 
 
 def build_accounts(report: dict) -> dict:
-    """按 pd01ad01 分桶到 5 类账户。"""
     accs = get_path(report, 'accountInfos', []) or []
     by_type = {t: [] for t in ACCOUNT_TYPES}
     for a in accs:
@@ -445,10 +374,7 @@ def build_accounts(report: dict) -> dict:
     result = {}
     for t, items in by_type.items():
         n = len(items)
-        numeric = []
-        cat_values = []
-        cat_mask = []
-        paystate = []
+        numeric, cat_values, cat_mask, paystate = [], [], [], []
         for a in items:
             basic = a.get('accountBasic', {}) or {}
             latest = a.get('latestInfo', {}) or {}
@@ -460,8 +386,7 @@ def build_accounts(report: dict) -> dict:
                     fv = math.copysign(math.log1p(abs(fv)), fv)
                 row_num.append(fv)
             numeric.append(row_num)
-            row_cat = []
-            row_cmask = []
+            row_cat, row_cmask = [], []
             for f, _t in ACCOUNT_CAT_FIELDS:
                 v = basic.get(f)
                 row_cat.append(v)
@@ -478,16 +403,14 @@ def build_accounts(report: dict) -> dict:
 
 
 def build_queries(report: dict, ref: datetime.datetime) -> dict:
-    """query 分支：每条 [log1p(days_ago)] + [机构类型, 查询原因]。"""
     recs = get_path(report, 'queryRecords', []) or []
     numeric, cat_values, cat_mask = [], [], []
     for r in recs:
         d = days_since(parse_date(r.get('ph010r01')), ref) or 0.0
-        if d != d:  # NaN
+        if d != d:
             d = 0.0
         numeric.append([math.log1p(max(0.0, d))])
-        row_cat = []
-        row_cmask = []
+        row_cat, row_cmask = [], []
         for f, _t in QUERY_CAT_FIELDS:
             v = r.get(f)
             row_cat.append(v)
@@ -498,7 +421,6 @@ def build_queries(report: dict, ref: datetime.datetime) -> dict:
 
 
 def build_publics(report: dict, ref: datetime.datetime) -> dict:
-    """public 分支：8 子表统一映射为 (amount_log1p, days_ago_log1p, type_id)。"""
     pinfo = get_path(report, 'publicInfo', {}) or {}
     numeric, cat_values, cmask = [], [], []
     for _node, type_name in PUBLIC_TYPES:
@@ -532,14 +454,11 @@ def build_publics(report: dict, ref: datetime.datetime) -> dict:
 
 
 # ============================================================
-# 五、主入口：单份 JSON → sample dict（已编码，纯 list）
+# 五、主入口：JSON → sample dict（已编码，纯 list）
 # ============================================================
 
 def build_sample(report: dict, vocab: dict) -> dict:
-    """把 CrisPbc.json 解析为 sample dict（纯 list 格式，可直接 json.dumps）。
-
-    生产端 Spark UDF 调这个；训练端 from_jsonable 反序列化即可。
-    """
+    """把 CrisPbc.json 解析为 sample dict（纯 list 格式，可直接 json.dumps）。"""
     ref = _report_ref_date(report)
     sample = {}
 
@@ -604,7 +523,12 @@ def build_sample(report: dict, vocab: dict) -> dict:
 
 
 def parse_report_to_struct_json(report_json_str: str, vocab: dict) -> str:
-    """Spark UDF 主函数：JSON 字符串 → pbc_struct JSON 字符串。"""
+    """Spark UDF 主函数：JSON 字符串 → pbc_struct JSON 字符串。
+
+    单条失败不拖死 Spark job：异常时返回 {"_error": "...", "report_id": "..."}。
+    """
+    if report_json_str is None:
+        return None
     try:
         report = json.loads(report_json_str)
     except (ValueError, TypeError):
@@ -613,19 +537,12 @@ def parse_report_to_struct_json(report_json_str: str, vocab: dict) -> str:
         sample = build_sample(report, vocab)
         return json.dumps(sample, ensure_ascii=False)
     except Exception as e:
-        # 生产环境容错：单条解析失败不要拖死整个 Spark job
         return json.dumps({'_error': str(e), 'report_id': report.get('reportsn', '')})
 
 
 # ============================================================
 # 六、Spark 集成
 # ============================================================
-
-def build_vocab_broadcast(spark, vocab_path: str):
-    """Spark broadcast vocab（executor 共享一份，避免每条记录都加载）。"""
-    vocab = load_vocab(vocab_path)
-    return spark.sparkContext.broadcast(vocab)
-
 
 def register_udfs(spark, vocab_bc):
     """注册 parse_pbc UDF 到 SparkSession。
@@ -641,19 +558,17 @@ def register_udfs(spark, vocab_bc):
     return _udf
 
 
-def run_spark_job(spark, input_table: str, input_column: str,
-                  output_table: str, vocab_path: str,
-                  text_column: str = None):
-    """完整 Spark 作业：读原始 JSON 列 → 产 pbc_struct（+ 可选 pbc_text）→ 写新表。
+def run_job(spark, input_table: str, input_column: str,
+            output_table: str, vocab_bc, text_column: str = None):
+    """完整 Spark 作业：读原始 JSON 列 → 产 pbc_struct → 写新表。
 
     Args:
         input_table: 原始表名（含 report_json 列）
         input_column: JSON 列名
-        output_table: 目标表名（含 pbc_struct STRING 列）
-        vocab_path: HDFS/本地 cat_vocab.json 路径
-        text_column: 如果已经有 pbc_text 列，一起透传到输出表（默认 None）
+        output_table: 目标表名
+        vocab_bc: Spark broadcast 的 vocab
+        text_column: 已有 pbc_text 列名（透传），None 时不 SELECT
     """
-    vocab_bc = build_vocab_broadcast(spark, vocab_path)
     register_udfs(spark, vocab_bc)
 
     select_cols = ['report_id']
@@ -666,73 +581,39 @@ def run_spark_job(spark, input_table: str, input_column: str,
         SELECT {', '.join(select_cols)}
         FROM {input_table}
     """
-    print(f'Running SQL:\n{sql}')
+    print(f'Running SQL:\n{sql}', flush=True)
     spark.sql(sql)
 
 
 # ============================================================
-# 七、本地 CLI（测试 / 构 vocab / spark-submit 入口）
+# 七、main（spark-submit 入口）
 # ============================================================
 
-def _cli():
-    parser = argparse.ArgumentParser(description='PBC Spark 处理（独立文件）')
-    sub = parser.add_subparsers(dest='cmd', required=True)
-
-    # build-vocab: 离线构建 cat_vocab.json
-    p1 = sub.add_parser('build-vocab', help='从码值表 xlsx 构建 cat_vocab.json')
-    p1.add_argument('--codetable', required=True, help='个人征信码值表.xlsx 路径')
-    p1.add_argument('--output', required=True, help='输出 cat_vocab.json 路径')
-
-    # test-single: 本地测单条 JSON
-    p2 = sub.add_parser('test-single', help='单条 JSON → pbc_struct（本地测试）')
-    p2.add_argument('--input', required=True, help='CrisPbc.json 路径')
-    p2.add_argument('--vocab', required=True, help='cat_vocab.json 路径')
-    p2.add_argument('--output', help='输出路径（不填则 stdout 预览）')
-
-    # run-spark: spark-submit 入口
-    p3 = sub.add_parser('run-spark', help='spark-submit 入口')
-    p3.add_argument('--input-table', required=True)
-    p3.add_argument('--input-column', default='report_json')
-    p3.add_argument('--output-table', required=True)
-    p3.add_argument('--vocab-path', required=True)
-    p3.add_argument('--text-column', default=None, help='已有 pbc_text 列名（透传）')
-
+def main():
+    parser = argparse.ArgumentParser(description='Spark PBC 处理作业')
+    parser.add_argument('--input-table', required=True, help='原始表名（含 JSON 列）')
+    parser.add_argument('--input-column', default='report_json', help='JSON 列名')
+    parser.add_argument('--output-table', required=True, help='目标表名')
+    parser.add_argument('--vocab-path', required=True,
+                        help='cat_vocab.json 路径（本地或 HDFS）')
+    parser.add_argument('--text-column', default=None,
+                        help='已有 pbc_text 列名（透传到输出表）')
     args = parser.parse_args()
 
-    if args.cmd == 'build-vocab':
-        print(f'building vocab from {args.codetable}')
-        vocab = build_cat_vocab(args.codetable)
-        save_vocab(vocab, args.output)
-        n_tables = sum(len(v) for v in vocab.values())
-        print(f'saved {n_tables} tables → {args.output}')
+    from pyspark.sql import SparkSession
+    spark = SparkSession.builder.appName('pbc-struct-parse').getOrCreate()
 
-    elif args.cmd == 'test-single':
-        vocab = load_vocab(args.vocab)
-        with open(args.input, encoding='utf-8') as f:
-            report_json = f.read()
-        struct_str = parse_report_to_struct_json(report_json, vocab)
-        if args.output:
-            with open(args.output, 'w', encoding='utf-8') as f:
-                f.write(struct_str)
-            print(f'wrote → {args.output}')
-        else:
-            print(struct_str[:3000])
-            if len(struct_str) > 3000:
-                print(f'... (total {len(struct_str)} chars)')
-
-    elif args.cmd == 'run-spark':
-        from pyspark.sql import SparkSession
-        spark = SparkSession.builder.appName('pbc-struct-parse').getOrCreate()
-        run_spark_job(
-            spark=spark,
-            input_table=args.input_table,
-            input_column=args.input_column,
-            output_table=args.output_table,
-            vocab_path=args.vocab_path,
-            text_column=args.text_column,
-        )
-        spark.stop()
+    vocab_bc = load_vocab_broadcast(spark, args.vocab_path)
+    run_job(
+        spark=spark,
+        input_table=args.input_table,
+        input_column=args.input_column,
+        output_table=args.output_table,
+        vocab_bc=vocab_bc,
+        text_column=args.text_column,
+    )
+    spark.stop()
 
 
 if __name__ == '__main__':
-    _cli()
+    main()
