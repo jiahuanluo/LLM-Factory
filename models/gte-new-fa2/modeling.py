@@ -304,21 +304,22 @@ class NewAttention(nn.Module):
         q: torch.Tensor,
         k: torch.Tensor,
         v: torch.Tensor,
-        attention_mask: Optional[torch.Tensor],
+        attn_metadata: dict,
     ) -> torch.Tensor:
-        """flash-attn varlen 路径：padded batch 也用 FA2。
+        """flash-attn 路径（已预计算 cu_seqlens/indices）。
 
-        Args:
-            q/k/v: [B, L, H, D]（已 apply RoPE）
-            attention_mask: None / [B, L]（1=valid, 0=pad）
-        Returns:
-            context: [B, L, H*D]
+        attn_metadata 由 NewModel.forward 预计算一次，所有层共享：
+          {
+            'is_padded': bool,
+            'cu_seqlens': torch.int32 [B+1] or None,
+            'indices': torch.long [total_valid] or None,
+            'max_seqlen': int or None,
+          }
         """
         B, L, H, D = q.shape
 
-        # 无 padding → 用 flash_attn_func（非 varlen，省 cu_seqlens 开销）
-        if attention_mask is None or bool(attention_mask.all()):
-            # flash_attn_func 期望 [B, L, H, D]
+        if not attn_metadata['is_padded']:
+            # 无 padding → 非 varlen（更省 cu_seqlens 开销）
             out = flash_attn_func(
                 q, k, v,
                 dropout_p=self.dropout_p if self.training else 0.0,
@@ -327,15 +328,11 @@ class NewAttention(nn.Module):
             )
             return out.reshape(B, L, H * D)
 
-        # 有 padding → varlen API：把所有 valid token 拼成一条长序列
-        mask_bool = attention_mask.to(torch.bool)  # [B, L]
-        valid_per_seq = mask_bool.sum(dim=1)  # [B]
-        # cu_seqlens: [0, len_1, len_1+len_2, ..., total_valid]
-        cu_seqlens = F.pad(valid_per_seq.cumsum(0).to(torch.int32), (1, 0), value=0)
-        max_seqlen = int(valid_per_seq.max().item())
+        # 有 padding → varlen，用预计算的 cu_seqlens/indices
+        cu_seqlens = attn_metadata['cu_seqlens']
+        indices = attn_metadata['indices']
+        max_seqlen = attn_metadata['max_seqlen']
 
-        # 把 [B, L, H, D] 展平后只挑 valid 位置 → [total_valid, H, D]
-        indices = torch.nonzero(mask_bool.flatten(), as_tuple=False).flatten()
         q_flat = q.reshape(B * L, H, D)
         k_flat = k.reshape(B * L, H, D)
         v_flat = v.reshape(B * L, H, D)
@@ -350,9 +347,8 @@ class NewAttention(nn.Module):
             dropout_p=self.dropout_p if self.training else 0.0,
             softmax_scale=self.softmax_scale,
             causal=False,
-        )  # [total_valid, H, D]
+        )
 
-        # 把 [total_valid, H*D] scatter 回 [B, L, H*D]
         out_padded = q_flat.new_zeros(B * L, H * D)
         out_padded[indices] = out_unpad.reshape(-1, H * D)
         return out_padded.view(B, L, H * D)
@@ -362,7 +358,7 @@ class NewAttention(nn.Module):
         q: torch.Tensor,
         k: torch.Tensor,
         v: torch.Tensor,
-        attention_mask: Optional[torch.Tensor],
+        attn_metadata: dict,
     ) -> torch.Tensor:
         """SDPA fallback：V100/CPU 或没装 flash-attn 时走这里。"""
         B, L, H, D = q.shape
@@ -371,11 +367,7 @@ class NewAttention(nn.Module):
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
 
-        if attention_mask is None or bool(attention_mask.all()):
-            attn_mask = None
-        else:
-            mask_bool = attention_mask.to(torch.bool)
-            attn_mask = mask_bool[:, None, None, :] & mask_bool[:, None, :, None]
+        attn_mask = attn_metadata.get('sdpa_mask')  # 预计算的 bool [B, 1, L, L] or None
 
         out = F.scaled_dot_product_attention(
             q, k, v,
@@ -383,13 +375,12 @@ class NewAttention(nn.Module):
             dropout_p=self.dropout_p if self.training else 0.0,
             is_causal=False,
         )
-        # [B, H, L, D] -> [B, L, H*D]
         return out.transpose(1, 2).contiguous().view(B, L, H * D)
 
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
+        attn_metadata: Optional[dict] = None,
         rope_embeds: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         attention_scale: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor]:
@@ -403,10 +394,14 @@ class NewAttention(nn.Module):
         if self.logn_attention_scale and attention_scale is not None:
             q = q * attention_scale.to(q.dtype)
 
+        if attn_metadata is None:
+            attn_metadata = {'is_padded': False, 'cu_seqlens': None, 'indices': None,
+                             'max_seqlen': None, 'sdpa_mask': None}
+
         if self._can_use_flash_attn(q):
-            context = self._flash_attn_forward(q, k, v, attention_mask)
+            context = self._flash_attn_forward(q, k, v, attn_metadata)
         else:
-            context = self._sdpa_forward(q, k, v, attention_mask)
+            context = self._sdpa_forward(q, k, v, attn_metadata)
 
         attn_output = self.o_proj(context)
         return (attn_output,)
@@ -445,7 +440,7 @@ class NewLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
+        attn_metadata: Optional[dict] = None,
         rope_embeds: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         attention_scale: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor]:
@@ -453,7 +448,7 @@ class NewLayer(nn.Module):
         residual = hidden_states
         attn_output = self.attention(
             hidden_states,
-            attention_mask=attention_mask,
+            attn_metadata=attn_metadata,
             rope_embeds=rope_embeds,
             attention_scale=attention_scale,
         )[0]
@@ -482,7 +477,7 @@ class NewEncoder(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
+        attn_metadata: Optional[dict] = None,
         rope_embeds: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         attention_scale: Optional[torch.Tensor] = None,
         output_hidden_states: Optional[bool] = False,
@@ -498,14 +493,14 @@ class NewEncoder(nn.Module):
                 layer_outputs = self._gradient_checkpointing_func(
                     layer_module.__call__,
                     hidden_states,
-                    attention_mask,
+                    attn_metadata,
                     rope_embeds,
                     attention_scale,
                 )
             else:
                 layer_outputs = layer_module(
                     hidden_states,
-                    attention_mask=attention_mask,
+                    attn_metadata=attn_metadata,
                     rope_embeds=rope_embeds,
                     attention_scale=attention_scale,
                 )
@@ -577,6 +572,49 @@ class NewModel(NewPreTrainedModel):
     def set_input_embeddings(self, value):
         self.embeddings.word_embeddings = value
 
+    def _build_attn_metadata(
+        self,
+        attention_mask: Optional[torch.Tensor],
+        input_shape: Tuple[int, ...],
+    ) -> dict:
+        """预计算 attention 辅助数据，所有层共享。
+
+        返回 dict 含：
+          - is_padded: bool       — 是否有 padding（决定 FA2 走 varlen 还是普通）
+          - cu_seqlens: [B+1] int32 — varlen 模式下样本边界（前缀和）
+          - indices: [total_valid] long — valid token 在 [B*L] 中的位置
+          - max_seqlen: int        — batch 内最长 valid 长度
+          - sdpa_mask: bool [B, 1, L, L] or None — SDPA fallback 用
+        """
+        if attention_mask is None:
+            return {'is_padded': False, 'cu_seqlens': None, 'indices': None,
+                    'max_seqlen': None, 'sdpa_mask': None}
+
+        # 一次性 GPU→CPU sync：判断是否全 1
+        is_padded = not bool(attention_mask.all())
+        if not is_padded:
+            return {'is_padded': False, 'cu_seqlens': None, 'indices': None,
+                    'max_seqlen': None, 'sdpa_mask': None}
+
+        mask_bool = attention_mask.to(torch.bool)  # [B, L]
+        valid_per_seq = mask_bool.sum(dim=1)  # [B]
+        # cu_seqlens: [0, len_1, len_1+len_2, ..., total_valid]
+        cu_seqlens = F.pad(valid_per_seq.cumsum(0).to(torch.int32), (1, 0), value=0)
+        # 一次性 GPU→CPU sync：取 max
+        max_seqlen = int(valid_per_seq.max().item())
+        indices = torch.nonzero(mask_bool.flatten(), as_tuple=False).flatten()
+
+        # SDPA fallback 用的 bool mask（仅当走 SDPA 时才用）
+        sdpa_mask = mask_bool[:, None, None, :] & mask_bool[:, None, :, None]
+
+        return {
+            'is_padded': True,
+            'cu_seqlens': cu_seqlens,
+            'indices': indices,
+            'max_seqlen': max_seqlen,
+            'sdpa_mask': sdpa_mask,
+        }
+
     def forward(
         self,
         input_ids: Optional[torch.Tensor] = None,
@@ -613,9 +651,11 @@ class NewModel(NewPreTrainedModel):
             inputs_embeds=inputs_embeds,
         )
 
-        # attention_mask 直接透传到 NewAttention：
-        # - 装了 flash-attn + sm_80+ → flash_attn_varlen_func（padded batch 也 FA2）
-        # - 否则 → SDPA 内部转 bool mask（mem-efficient/math 后端）
+        # === 预计算 attention metadata，所有层共享 ===
+        # 把 cu_seqlens/indices/max_seqlen/bool_mask 在 forward 开始时算一次，
+        # 避免 NewAttention 每层都重算（24 层 × 每层 GPU→CPU sync 会慢一倍）
+        attn_metadata = self._build_attn_metadata(attention_mask, input_shape)
+
         attention_scale = None
         if self.config.logn_attention_scale:
             seq_len = input_shape[-1]
@@ -627,7 +667,7 @@ class NewModel(NewPreTrainedModel):
 
         encoder_outputs = self.encoder(
             embedding_output,
-            attention_mask=attention_mask,
+            attn_metadata=attn_metadata,
             rope_embeds=rope_embeds,
             attention_scale=attention_scale,
             output_hidden_states=output_hidden_states,
