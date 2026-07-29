@@ -16,7 +16,6 @@ from pbc_credit.fields import PAYSTATE_VOCAB_SIZE, PUBLIC_TYPE_VOCAB_SIZE
 def _small_model_cfg(pretrain: bool = False) -> PbcCreditModelConfig:
     return PbcCreditModelConfig(
         d=32, n_heads=4, n_layers=1, dropout=0.0, top_hidden=64,
-        use_text_branch=False,  # 单测只测结构分支，避免加载 gte-new
         user_numeric_dim=10,
         user_cat_tables={'性别代码表': 4, '学历代码表': 8, '学位代码表': 6,
                          '就业状况代码表': 15, '世界各国和地区名称代码': 7,

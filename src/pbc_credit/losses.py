@@ -5,8 +5,32 @@ import torch
 import torch.nn.functional as F
 
 
-def pretrain_loss(out: dict, mlm_weight: float = 1.0, struct_weight: float = 1.0) -> tuple[torch.Tensor, dict]:
-    """各分支 mask 损失等权求和（含 text MLM）。
+class EMANormalizer:
+    """Branch-level EMA loss normalizer.
+
+    For each branch, track the EMA of its raw loss value and return a weight
+    1 / (ema + eps) so that high-magnitude branches don't dominate the total.
+    The first batch initializes the EMA to the current value (weight = 1/cur).
+    """
+
+    def __init__(self, decay: float = 0.99, eps: float = 1e-8):
+        self.decay = decay
+        self.eps = eps
+        self.stats: dict[str, float] = {}
+
+    def weight(self, key: str, loss_tensor: torch.Tensor) -> float:
+        cur = float(loss_tensor.detach().item())
+        if key not in self.stats:
+            self.stats[key] = cur
+        else:
+            self.stats[key] = self.decay * self.stats[key] + (1 - self.decay) * cur
+        return 1.0 / (self.stats[key] + self.eps)
+
+
+def pretrain_loss(out: dict,
+                  struct_weight: float = 1.0,
+                  normalizer: EMANormalizer | None = None) -> tuple[torch.Tensor, dict]:
+    """各分支 mask 损失求和。
 
     out 中可能包含：
       account_numeric_pred / account_numeric_target  [N, F]
@@ -14,7 +38,8 @@ def pretrain_loss(out: dict, mlm_weight: float = 1.0, struct_weight: float = 1.0
       query_numeric_pred / query_numeric_target [N, 1]
       public_numeric_pred / public_numeric_target [N, 2]
       summary_numeric_pred / summary_numeric_target [B, F]
-      text_logits [B, L, V] / text_target [B, L] / text_mask_pos [B, L] bool
+
+    若提供 normalizer，每个分支会被 1/EMA(loss) 加权，使各分支有效贡献接近 1。
     """
     components = {}
     total = torch.zeros(1, device=_first_device(out), dtype=torch.float32)
@@ -35,21 +60,10 @@ def pretrain_loss(out: dict, mlm_weight: float = 1.0, struct_weight: float = 1.0
                                        ignore_index=0)
             else:
                 loss = F.mse_loss(pred.float(), tgt.float())
+            w = normalizer.weight(f'loss/{prefix}', loss) if normalizer is not None else 1.0
             components[f'loss/{prefix}'] = loss.item()
-            total = total + struct_weight * loss
-            has_any = True
-
-    # text MLM loss
-    if 'text_logits' in out and 'text_target' in out:
-        mask_pos = out.get('text_mask_pos')
-        logits = out['text_logits']
-        target = out['text_target']
-        if mask_pos is not None and mask_pos.any():
-            pred = logits[mask_pos]        # [N_masked, V]
-            tgt = target[mask_pos]          # [N_masked]
-            mlm = F.cross_entropy(pred, tgt.long())
-            components['loss/text_mlm'] = mlm.item()
-            total = total + mlm_weight * mlm
+            components[f'weight/{prefix}'] = w
+            total = total + struct_weight * w * loss
             has_any = True
 
     if not has_any:

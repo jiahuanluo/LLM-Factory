@@ -1,16 +1,18 @@
+# Smoke test：少量 step 看 loss 是否下降、paystate loss 是否真正在学习
 pretrain_samples:
   - data/pbc/processed/train.jsonl
 val_samples: data/pbc/processed/val.jsonl
 cat_vocab: data/pbc/processed/cat_vocab.json
 
-output_dir: output/pbc_pretrained
+output_dir: tmp/pbc_pretrain_smoke
 
-epochs: 2
+epochs: 3
 batch_size: 8
 lr: 1.0e-4
 weight_decay: 0.01
 mask_ratio: 0.15
 struct_weight: 1.0
+ema_decay: 0.9   # 较快追踪，smoke 阶段看权重变化
 
 d: 128
 n_heads: 4
@@ -18,7 +20,7 @@ n_layers: 2
 dropout: 0.1
 
 num_workers: 0
-log_every: 20
-eval_per_steps: 50
+log_every: 5
+eval_per_steps: 15
 save_every_epochs: 1
 seed: 42

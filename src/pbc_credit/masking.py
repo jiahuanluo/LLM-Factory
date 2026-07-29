@@ -1,33 +1,7 @@
-"""PBC masking：对 numeric / paystate / query / public / summary / text 分支做联合 mask。"""
+"""PBC masking：对 numeric / paystate / query / public / summary 分支做联合 mask。"""
 from __future__ import annotations
 
 import torch
-
-
-# gte-new tokenizer 特殊 token id（在 0-103 范围，BERT 系约定）
-TEXT_SPECIAL_IDS = (0, 100, 101, 102, 103)  # PAD / UNK / CLS / SEP / MASK
-
-
-def mask_text(input_ids: torch.Tensor,
-              attention_mask: torch.Tensor,
-              mask_token_id: int = 103,
-              mask_ratio: float = 0.15,
-              vocab_size: int = 30528) -> tuple[torch.Tensor, torch.Tensor]:
-    """对 text token 做 MLM mask（BERT 约定：跳过 special + pad）。
-
-    Returns:
-      masked_ids: 替换 [MASK] 后的 input_ids
-      mask_pos: [B, L] bool，True = 被 mask 的位置
-    """
-    rand = torch.rand_like(input_ids, dtype=torch.float32)
-    special_mask = torch.zeros_like(input_ids, dtype=torch.bool)
-    for sid in TEXT_SPECIAL_IDS:
-        special_mask |= (input_ids == sid)
-    valid = (attention_mask == 1) & (~special_mask)
-    mask_pos = valid & (rand < mask_ratio)
-    masked_ids = input_ids.clone()
-    masked_ids[mask_pos] = mask_token_id
-    return masked_ids, mask_pos
 
 
 def _mask_branch(numeric: torch.Tensor, mask: torch.Tensor, mask_ratio: float):
@@ -104,14 +78,5 @@ def add_masks_to_batch(batch: dict, mask_ratio: float = 0.15) -> dict:
         s_pos = rand_s < mask_ratio
         out['summary_numeric'] = s_num.masked_fill(s_pos, 0.0)
         out['summary_masked_pos'] = s_pos
-
-    # text MLM mask
-    text_ids = batch.get('text_input_ids')
-    text_mask = batch.get('text_attention_mask')
-    if text_ids is not None and text_mask is not None:
-        out['text_input_ids_raw'] = text_ids.clone()
-        masked_ids, text_pos = mask_text(text_ids, text_mask, mask_ratio=mask_ratio)
-        out['text_input_ids'] = masked_ids
-        out['text_masked_pos'] = text_pos
 
     return out

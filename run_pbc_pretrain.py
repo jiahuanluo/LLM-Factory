@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import random
 import sys
 import time
@@ -14,6 +15,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 import yaml
 from torch.utils.data import ConcatDataset, DataLoader
 
@@ -25,7 +27,7 @@ from pbc_credit.fields import (
     USER_CAT_FIELDS, ACCOUNT_CAT_FIELDS, QUERY_CAT_FIELDS,
     SUMMARY_TABLES, PAYSTATE_VOCAB_SIZE, PUBLIC_TYPE_VOCAB_SIZE,
 )
-from pbc_credit.losses import pretrain_loss
+from pbc_credit.losses import pretrain_loss, EMANormalizer
 from pbc_credit.masking import add_masks_to_batch
 from pbc_credit.model import PbcCreditModel, PbcCreditModelConfig
 
@@ -44,6 +46,45 @@ class MaskingCollator:
         batch = self.base(samples)
         batch.pop('target', None)
         return add_masks_to_batch(batch, mask_ratio=self.mask_ratio)
+
+
+@torch.no_grad()
+def evaluate_pretrain(model, val_loader, device, mask_seed: int = 12345) -> dict:
+    """在 val 上跑 reconstruction，返回每分支 loss + paystate perplexity。
+
+    mask_seed 固定 → 每次 eval 的 mask pattern 相同 → 指标跨 step 可直接比较。
+    """
+    model.eval()
+    torch.manual_seed(mask_seed)
+    branch_sum: dict[str, float] = {}
+    branch_n: dict[str, int] = {}
+    for batch in val_loader:
+        batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
+        out = model(batch)
+        for k in list(out.keys()):
+            if not k.endswith('_pred'):
+                continue
+            prefix = k[:-5]
+            tgt_key = f'{prefix}_target'
+            if tgt_key not in out:
+                continue
+            pred, tgt = out[k], out[tgt_key]
+            if pred.shape[0] == 0:
+                continue
+            if 'paystate' in prefix:
+                loss = F.cross_entropy(pred.reshape(-1, pred.size(-1)),
+                                       tgt.reshape(-1).long(), ignore_index=0)
+            else:
+                loss = F.mse_loss(pred.float(), tgt.float())
+            branch_sum[prefix] = branch_sum.get(prefix, 0.0) + loss.item()
+            branch_n[prefix] = branch_n.get(prefix, 0) + 1
+    metrics = {f'val/{k}': v / max(branch_n[k], 1) for k, v in branch_sum.items()}
+    paystate_losses = [metrics[f'val/{k}'] for k in branch_sum if 'paystate' in k]
+    if paystate_losses:
+        metrics['val/paystate_ppl'] = float(math.exp(sum(paystate_losses) / len(paystate_losses)))
+    metrics['val/total'] = sum(metrics[f'val/{k}'] for k in branch_sum)
+    model.train()
+    return metrics
 
 
 def build_model_cfg(cfg: dict, vocab: dict) -> PbcCreditModelConfig:
@@ -89,11 +130,6 @@ def build_model_cfg(cfg: dict, vocab: dict) -> PbcCreditModelConfig:
         query_numeric_dim=1,
         query_cat_tables=q_tables,
         public_type_vocab_size=PUBLIC_TYPE_VOCAB_SIZE,
-        text_encoder_name=cfg.get('text_encoder_name', 'models/gte-new'),
-        text_hidden_size=cfg.get('text_hidden_size', 1024),
-        text_vocab_size=cfg.get('text_vocab_size', 30528),
-        text_max_len=cfg.get('text_max_len', 512),
-        use_text_branch=cfg.get('use_text_branch', False),
     )
 
 
@@ -134,6 +170,20 @@ def main():
         drop_last=True,
     )
 
+    # === Val loader（独立 split，固定 mask seed 跨 step 可比） ===
+    val_loader = None
+    if cfg.get('val_samples'):
+        val_ds = PbcDataset(cfg['val_samples'], pretrain_mode=True)
+        print(f'  val: {len(val_ds):,} samples')
+        val_loader = DataLoader(
+            val_ds,
+            batch_size=cfg.get('eval_batch_size', cfg['batch_size']) * 2,
+            shuffle=False,
+            collate_fn=collator,
+            num_workers=cfg.get('num_workers', 0),
+            pin_memory=True,
+        )
+
     # === Model ===
     with open(cfg['cat_vocab']) as f:
         vocab = json.load(f)
@@ -142,6 +192,9 @@ def main():
     model = PbcCreditModel(model_cfg, pretrain_mode=True).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f'=== Model: {n_params:,} params ({n_params/1e6:.2f}M), device={device} ===')
+
+    # === Loss normalizer（分支 EMA 权重，让 accounts(10 项) 不主导 query/public/summary） ===
+    normalizer = EMANormalizer(decay=cfg.get('ema_decay', 0.99))
 
     # === Optim ===
     optimizer = torch.optim.AdamW(
@@ -168,6 +221,7 @@ def main():
 
     model.train()
     global_step = 0
+    best_val_loss = float('inf')
     start_time = time.time()
 
     for epoch in range(cfg['epochs']):
@@ -180,7 +234,7 @@ def main():
 
             optimizer.zero_grad()
             out = model(batch)
-            loss, log_dict = pretrain_loss(out)
+            loss, log_dict = pretrain_loss(out, normalizer=normalizer)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
@@ -199,16 +253,43 @@ def main():
                 cur_lr = scheduler.get_last_lr()[0]
                 comp_str = ' '.join(
                     f"{k.split('/')[-1]}={v:.3f}"
-                    for k, v in log_dict.items() if k != 'loss/total'
+                    for k, v in log_dict.items()
+                    if k != 'loss/total' and k.startswith('loss/')
                 )
                 log(f'  [ep{epoch} step {global_step}/{total_steps}] '
                     f'loss={loss.item():.4f}  {comp_str}  '
                     f'lr={cur_lr:.2e}  sps={sps:.1f}  eta={eta_min:.1f}m')
 
+            # === Val eval ===
+            if val_loader is not None and global_step % cfg.get('eval_per_steps', 50) == 0:
+                metrics = evaluate_pretrain(model, val_loader, device)
+                comp_str = ' '.join(
+                    f"{k.split('/')[-1]}={v:.4f}"
+                    for k, v in metrics.items()
+                    if k != 'val/total'
+                )
+                log(f'  [val step {global_step}] total={metrics["val/total"]:.4f}  {comp_str}')
+                if metrics['val/total'] < best_val_loss:
+                    best_val_loss = metrics['val/total']
+                    state = {
+                        k: v for k, v in model.state_dict().items()
+                        if not k.endswith('_mask_head.weight') and not k.endswith('_mask_head.bias')
+                    }
+                    torch.save({
+                        'model_state': state,
+                        'config': {**cfg},
+                        'model_cfg': model_cfg.__dict__,
+                        'val_metrics': metrics,
+                        'step': global_step,
+                    }, out_dir / 'best_encoder.pt')
+                    log(f'    ★ new best val_total={best_val_loss:.4f} saved → best_encoder.pt')
+                model.train()
+
         avg = epoch_loss / max(n_batches, 1)
         avg_comp = {k: v / max(n_batches, 1) for k, v in epoch_components.items()}
         comp_str = ' '.join(f"{k.split('/')[-1]}={v:.4f}"
-                            for k, v in avg_comp.items() if k != 'loss/total')
+                            for k, v in avg_comp.items()
+                            if k != 'loss/total' and k.startswith('loss/'))
         log(f'=== Epoch {epoch} done: avg_loss={avg:.4f}  {comp_str} ===')
 
         # save encoder

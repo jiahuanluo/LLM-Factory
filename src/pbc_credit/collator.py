@@ -112,11 +112,4 @@ class PbcCollator:
         if 'target' in samples[0]:
             batch['target'] = torch.stack([s['target'] for s in samples]).squeeze(-1)
 
-        # 7. text (pbc_text, 变长 pad 到 batch max)
-        if 'text_input_ids' in samples[0]:
-            text_ids = [s['text_input_ids'] for s in samples]
-            text_masks = [s['text_attention_mask'] for s in samples]
-            batch['text_input_ids'] = pad_1d(text_ids, pad_value=0)
-            batch['text_attention_mask'] = pad_1d(text_masks, pad_value=0)
-
         return batch

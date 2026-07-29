@@ -20,7 +20,7 @@ import torch
 
 from .fields import (
     get_path,
-    USER_CAT_FIELDS, USER_NUMERIC_SPECS,
+    USER_CAT_FIELDS,
     SUMMARY_TABLES,
     ACCOUNT_TYPES, ACCOUNT_CAT_FIELDS, ACCOUNT_NUMERIC_FIELDS,
     QUERY_CAT_FIELDS, QUERY_NUMERIC_FIELDS,
@@ -71,40 +71,6 @@ def _report_ref_date(report: dict) -> datetime.datetime:
         if dt:
             return dt
     return datetime.datetime.now()
-
-
-# ============================================================
-# Normalizer（z-score，只对 user_numeric；account/query 用 LayerNorm）
-# ============================================================
-
-class Normalizer:
-    """保存 user_numeric 字段的 mean/std，apply 时对缺失填 0。"""
-    def __init__(self):
-        self.stats: dict[str, tuple[float, float]] = {}
-
-    def fit(self, samples: list[dict]):
-        if not samples:
-            return
-        specs = [name for name, _ in USER_NUMERIC_SPECS]
-        for i, name in enumerate(specs):
-            vals = [s['user_numeric'][i].item() for s in samples
-                    if not np.isnan(s['user_numeric'][i].item())]
-            if len(vals) < 2:
-                self.stats[name] = (0.0, 1.0)
-                continue
-            mu, sigma = float(np.mean(vals)), float(np.std(vals) + 1e-6)
-            self.stats[name] = (mu, sigma)
-
-    def apply_to_list(self, samples: list[dict]):
-        specs = [name for name, _ in USER_NUMERIC_SPECS]
-        for s in samples:
-            for i, name in enumerate(specs):
-                mu, sigma = self.stats.get(name, (0.0, 1.0))
-                v = s['user_numeric'][i].item()
-                if np.isnan(v):
-                    s['user_numeric'][i] = 0.0
-                else:
-                    s['user_numeric'][i] = (v - mu) / sigma
 
 
 # ============================================================

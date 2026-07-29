@@ -1,14 +1,12 @@
 """基于 CrisPbc.json 模板造假数据集，用于本地端到端跑通。
 
-输出：
-  data/pbc/processed/samples_train.pkl
-  data/pbc/processed/samples_val.pkl
-  data/pbc/processed/samples_test_unlabeled.pkl
+输出（生产 JSONL 格式，每行 {biz_sno, pbcg2_json, label?}）：
+  data/pbc/processed/train.jsonl
+  data/pbc/processed/val.jsonl
   data/pbc/processed/cat_vocab.json
 
-每条 sample 同时包含：
-  - pbc_struct 各模态 tensor（src/pbc_credit/sample_builder）
-  - pbc_text 的 tokenized 结果（text_input_ids + text_attention_mask）
+每条 sample 包含 pbc_struct 各模态 tensor（src/pbc_credit/sample_builder）。
+文本分支（pbc_text / MLM）已拆分到 run_mlm.py 单独预训练，本脚本不再产出 text 字段。
 
 用法：
   python scripts/prepare_pbc_samples.py --template data/home-credit/个人征信/CrisPbc.json --n 1000
@@ -18,7 +16,6 @@ from __future__ import annotations
 import argparse
 import copy
 import json
-import pickle
 import random
 import sys
 from pathlib import Path
@@ -30,64 +27,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'src'))
 
 from pbc_credit.sample_builder import build_sample, encode_sample
 from pbc_credit.vocab import build_cat_vocab, save_vocab, load_vocab
-from pbc_credit.fields import get_path
-
-
-# ============================================================
-# pbc_text 拼接（生产侧由 Spark 做，这里本地造假参考）
-# ============================================================
-
-def build_pbc_text(report: dict, max_len: int = 512) -> str:
-    """把 CrisPbc.json 的关键字段拼成 pbc_text 文本。
-
-    生产端你们已有自己的拼接逻辑，这个只是本地 smoke test 用。
-    """
-    parts = []
-
-    idt = get_path(report, 'personInfo.identity', {}) or {}
-    if idt:
-        parts.append(f"[PERSON] 性别{idt.get('pb01ad01', '')} 学历{idt.get('pb01ad02', '')} "
-                     f"学位{idt.get('pb01ad03', '')} 就业{idt.get('pb01ad04', '')}")
-
-    marriage = get_path(report, 'personInfo.marriage', {}) or {}
-    if marriage:
-        parts.append(f"[MARRIAGE] 状态{marriage.get('pb020d01', '')}")
-
-    for prof in (get_path(report, 'personInfo.professionals', []) or [])[:1]:
-        parts.append(f"[JOB] 单位{prof.get('pb040q01', '')} 行业{prof.get('pb040d03', '')} "
-                     f"职务{prof.get('pb040d05', '')}")
-
-    # 账户
-    for a in (get_path(report, 'accountInfos', []) or []):
-        b = a.get('accountBasic', {}) or {}
-        parts.append(f"[ACCT] 类型{b.get('pd01ad01', '')} 业务{b.get('pd01ad02', '')} "
-                     f"发放{b.get('pd01aj01', '')} 余额{b.get('pd01aj02', '')} "
-                     f"发放日{b.get('pd01ar01', '')}")
-        # 最近 24 月还款状态
-        s24 = get_path(a, 'latest24PayState.latest24state')
-        if s24:
-            parts.append(f"[PAYSTATE24] {s24}")
-
-    # 概要
-    sinfo = get_path(report, 'summaryInfo', {}) or {}
-    if sinfo.get('querySummary'):
-        qs = sinfo['querySummary']
-        parts.append(f"[QUERY_SUM] 近1月贷款{qs.get('pc05bs01', '')}次 "
-                     f"近2年贷后{qs.get('pc05bs06', '')}次")
-
-    # 查询记录
-    for q in (get_path(report, 'queryRecords', []) or [])[:5]:
-        parts.append(f"[QUERY] 机构{q.get('ph010d01', '')} 原因{q.get('ph010q03', '')} "
-                     f"日期{q.get('ph010r01', '')}")
-
-    text = ' '.join(parts)
-    return text[:max_len * 4]  # 粗糙截断（按字符）
-
-
-def get_text_tokenizer(name: str = 'models/gte-new'):
-    """加载 gte-new tokenizer（生产端你们可能用别的，这里复用项目内模型）。"""
-    from transformers import AutoTokenizer
-    return AutoTokenizer.from_pretrained(name, trust_remote_code=True)
 
 
 def perturb_report(template: dict, idx: int, seed: int) -> dict:
@@ -130,7 +69,6 @@ def main():
     parser.add_argument('--n', type=int, default=1000, help='总样本数')
     parser.add_argument('--pos_ratio', type=float, default=0.2)
     parser.add_argument('--val_ratio', type=float, default=0.15)
-    parser.add_argument('--test_ratio', type=float, default=0.15)
     parser.add_argument('--codetable', default='data/home-credit/个人征信/个人征信码值表.xlsx')
     parser.add_argument('--seed', type=int, default=42)
     args = parser.parse_args()
@@ -185,45 +123,39 @@ def main():
 
     n = args.n
     n_val = int(n * args.val_ratio)
-    n_test = int(n * args.test_ratio)
-    n_train = n - n_val - n_test
+    n_train = n - n_val
 
     splits = {
         'train': [(i, 1 if random.random() < args.pos_ratio else 0) for i in range(n_train)],
         'val': [(i + n_train, 1 if random.random() < args.pos_ratio else 0)
                 for i in range(n_val)],
-        'test_unlabeled': [(i + n_train + n_val, None)
-                           for i in range(n_test)],
     }
 
-    print(f'=== 造假 {n} 样本：train={n_train} val={n_val} test={n_test} ===')
-
-    # 加载 gte-new tokenizer（造假含 pbc_text）
-    try:
-        tokenizer = get_text_tokenizer()
-        print(f'loaded tokenizer: {tokenizer.__class__.__name__}, vocab={tokenizer.vocab_size}')
-    except Exception as e:
-        print(f'WARN: 无法加载 gte-new tokenizer ({e})，sample 不含 text_input_ids')
-        tokenizer = None
+    print(f'=== 造假 {n} 样本：train={n_train} val={n_val} ===')
 
     for split, items in splits.items():
-        out_path = out_dir / f'samples_{split}.pkl'
-        with open(out_path, 'wb') as f:
+        out_path = out_dir / f'{split}.jsonl'
+        n_written = 0
+        with open(out_path, 'w', encoding='utf-8') as f:
             for global_idx, label in items:
                 r = perturb_report(template, global_idx, args.seed)
                 sample = build_sample(r, vocab)
                 encode_sample(sample, vocab)
-                # 造假 pbc_text
-                if tokenizer is not None:
-                    text = build_pbc_text(r, max_len=128)
-                    enc = tokenizer(text, max_length=128, truncation=True,
-                                    padding=False, return_tensors=None)
-                    sample['text_input_ids'] = torch.tensor(enc['input_ids'], dtype=torch.long)
-                    sample['text_attention_mask'] = torch.tensor(enc['attention_mask'], dtype=torch.long)
+                biz_sno = sample.pop('report_id', f'idx_{global_idx:010d}')
+                sample.pop('target', None)  # label 走 JSONL 顶层，不进 pbcg2_json
+                inner = {
+                    k: (v.tolist() if hasattr(v, 'tolist') else v)
+                    for k, v in sample.items()
+                }
+                record = {
+                    'biz_sno': biz_sno,
+                    'pbcg2_json': json.dumps(inner, ensure_ascii=False),
+                }
                 if label is not None:
-                    sample['target'] = torch.tensor([float(label)], dtype=torch.float32)
-                pickle.dump(sample, f)
-        print(f'  wrote {len(items)} → {out_path}')
+                    record['label'] = int(label)
+                f.write(json.dumps(record, ensure_ascii=False) + '\n')
+                n_written += 1
+        print(f'  wrote {n_written} → {out_path}')
 
     print(f'\n=== Done. Samples in {out_dir} ===')
 

@@ -1,9 +1,10 @@
+# Finetune smoke：从 pretrain ckpt 接着微调，看 val AUC/KS
 train_samples: data/pbc/processed/train.jsonl
 val_samples:   data/pbc/processed/val.jsonl
 cat_vocab:     data/pbc/processed/cat_vocab.json
-init_from_pretrain: output/pbc_pretrained/encoder_state.pt
+init_from_pretrain: tmp/pbc_pretrain_smoke/encoder_state.pt
 
-output_dir: output/pbc_finetuned
+output_dir: tmp/pbc_finetune_smoke
 
 epochs: 5
 batch_size: 8
@@ -17,6 +18,6 @@ n_layers: 2
 dropout: 0.1
 
 num_workers: 0
-log_every: 20
-eval_per_epoch_steps: 100
+log_every: 5
+eval_per_epoch_steps: 10
 seed: 42
