@@ -55,9 +55,24 @@ def pretrain_loss(out: dict,
             if pred.shape[0] == 0:
                 continue
             if 'paystate' in prefix:
-                loss = F.cross_entropy(pred.reshape(-1, pred.size(-1)),
-                                       tgt.reshape(-1).long(),
-                                       ignore_index=0)
+                # P1 B3: paystate sample weight — 非 PAD 位置 weight=3, PAD=1
+                # 防止 left-pad 稀释有效 loss 信号
+                tgt_flat = tgt.reshape(-1).long()
+                pred_flat = pred.reshape(-1, pred.size(-1))
+                per_sample_ce = F.cross_entropy(
+                    pred_flat, tgt_flat, ignore_index=0, reduction='none',
+                )
+                weight = torch.where(
+                    tgt_flat != 0,
+                    torch.tensor(3.0, device=pred.device, dtype=pred_flat.dtype),
+                    torch.tensor(1.0, device=pred.device, dtype=pred_flat.dtype),
+                )
+                mask = (tgt_flat != 0)
+                if mask.any():
+                    loss = (per_sample_ce * weight).sum() / weight.sum().clamp(min=1.0)
+                else:
+                    loss = torch.zeros(1, device=pred.device, dtype=pred_flat.dtype,
+                                       requires_grad=True).mean()
             else:
                 loss = F.mse_loss(pred.float(), tgt.float())
             w = normalizer.weight(f'loss/{prefix}', loss) if normalizer is not None else 1.0

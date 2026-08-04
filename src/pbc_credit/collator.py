@@ -72,8 +72,8 @@ class PbcCollator:
         batch['summary_cat_ids'] = torch.stack([s['summary_cat_ids'] for s in samples])
         batch['summary_cat_mask'] = torch.stack([s['summary_cat_mask'] for s in samples])
 
-        # 3. accounts (variable, 5 types)
-        for t_lower in ['d1', 'r1', 'r2', 'r3', 'r4']:
+        # 3. accounts (variable, 6 types: d1/r1/r2/r3/r4/c1)
+        for t_lower in ['d1', 'r1', 'r2', 'r3', 'r4', 'c1']:
             num_t = [s[f'{t_lower}_numeric'] for s in samples]
             mask_t = [s[f'{t_lower}_mask'] for s in samples]
             cat_t = [s[f'{t_lower}_cat_ids'] for s in samples]
@@ -108,7 +108,17 @@ class PbcCollator:
         batch['public_cat_ids'] = padded_pcat
         batch['public_mask'] = padded_pmask
 
-        # 6. target (optional)
+        # 6. obligations（合并 agreement + postpay + related_repay）
+        o_num = [s['obligation_numeric'] for s in samples]
+        o_mask = [s['obligation_mask'] for s in samples]
+        o_cat = [s['obligation_cat_ids'] for s in samples]
+        padded_onum, padded_omask = pad_2d(o_num, o_mask, pad_value=0.0)
+        padded_ocat, _ = pad_2d(o_cat, o_mask, pad_value=0)
+        batch['obligation_numeric'] = padded_onum
+        batch['obligation_cat_ids'] = padded_ocat
+        batch['obligation_mask'] = padded_omask
+
+        # 7. target (optional)
         if 'target' in samples[0]:
             batch['target'] = torch.stack([s['target'] for s in samples]).squeeze(-1)
 

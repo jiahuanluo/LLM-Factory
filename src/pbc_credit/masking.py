@@ -30,8 +30,8 @@ def add_masks_to_batch(batch: dict, mask_ratio: float = 0.15) -> dict:
     """
     out = dict(batch)
 
-    # accounts numeric + paystate
-    for t in ['d1', 'r1', 'r2', 'r3', 'r4']:
+    # accounts numeric + paystate（6 类共享 mask 逻辑）
+    for t in ['d1', 'r1', 'r2', 'r3', 'r4', 'c1']:
         num = batch.get(f'{t}_numeric')
         mask = batch.get(f'{t}_mask')
         if num is None or mask is None:
@@ -69,6 +69,15 @@ def add_masks_to_batch(batch: dict, mask_ratio: float = 0.15) -> dict:
         masked_pn, p_pos = _mask_branch(p_num, p_mask, mask_ratio)
         out['public_numeric'] = masked_pn
         out['public_masked_pos'] = p_pos
+
+    # obligations
+    o_num = batch.get('obligation_numeric')
+    o_mask = batch.get('obligation_mask')
+    if o_num is not None:
+        out['obligation_numeric_raw'] = o_num.clone()
+        masked_on, o_pos = _mask_branch(o_num, o_mask, mask_ratio)
+        out['obligation_numeric'] = masked_on
+        out['obligation_masked_pos'] = o_pos
 
     # summary numeric
     s_num = batch.get('summary_numeric')

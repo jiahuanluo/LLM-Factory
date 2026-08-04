@@ -1,6 +1,6 @@
-# PBC 微调 smoke：从 pretrain ckpt 接着训
-train_samples: data/pbc/processed/train.jsonl
-val_samples: data/pbc/processed/val.jsonl
+# PBC 微调 mixed smoke：base + diverse 报告混合
+train_samples: data/pbc/processed/train_mixed.jsonl
+val_samples: data/pbc/processed/val_mixed.jsonl
 cat_vocab: data/pbc/processed/cat_vocab.json
 
 # === PbcFinetuneModelArguments ===
@@ -8,28 +8,28 @@ d: 128
 n_heads: 4
 n_layers: 2
 dropout: 0.1
-init_from_pretrain: tmp/pbc_pretrain_smoke/encoder_state.pt
+init_from_pretrain: tmp/pbc_pretrain_mixed_smoke/encoder_state.pt
 pos_weight: 4.0
 
 # === TrainingArguments ===
-output_dir: tmp/pbc_finetune_smoke
+output_dir: tmp/pbc_finetune_mixed_smoke
 
-num_train_epochs: 5
-per_device_train_batch_size: 8
-per_device_eval_batch_size: 16
+num_train_epochs: 3
+per_device_train_batch_size: 4
+per_device_eval_batch_size: 4
 learning_rate: 5.0e-5
 weight_decay: 0.01
 max_grad_norm: 1.0
 warmup_ratio: 0.1
 
-logging_steps: 5
+logging_steps: 10
 logging_first_step: true
 
 eval_strategy: steps
-eval_steps: 10
+eval_steps: 20
 save_strategy: steps
-save_steps: 10
-save_total_limit: 3
+save_steps: 20
+save_total_limit: 2
 load_best_model_at_end: true
 metric_for_best_model: eval_auc
 greater_is_better: true

@@ -1,11 +1,12 @@
-"""PbcCreditModel：5 模态 + 3 交互对的 Model 1 变体。
+"""PbcCreditModel：6 模态 + 3 交互对的 Model 1 变体（对齐生产数据）。
 
 模态：
-  - user（个人信息，固定维度）
+  - user（个人信息，固定 14 维：基础 10 + score 4）
   - summary（信息概要 13 表聚合，固定维度）
-  - accounts（5 类账户：d1/r1/r2/r3/r4，变长 + 60 月 paystate）
+  - accounts（6 类账户：d1/r1/r2/r3/r4/c1，变长 + 60 月 paystate + specialTrades 衍生）
   - queries（查询记录，变长）
   - publics（公共信息，变长）
+  - obligations（agreement + postpay + related_repay 合并；变长）
 
 交互：
   - int_aa：d1 × r2（非循环贷 × 贷记卡）
@@ -23,6 +24,7 @@ import torch.nn.functional as F
 from .fields import (
     PAYSTATE_VOCAB_SIZE, PUBLIC_TYPE_VOCAB_SIZE,
     USER_CAT_FIELDS, ACCOUNT_CAT_FIELDS, QUERY_CAT_FIELDS, SUMMARY_TABLES,
+    OBLIGATION_TYPE_VOCAB_SIZE,
 )
 
 
@@ -38,16 +40,16 @@ class PbcCreditModelConfig:
     dropout: float = 0.1
     top_hidden: int = 256
 
-    # user
-    user_numeric_dim: int = 10
+    # user（13 base + score 5 = 18）
+    user_numeric_dim: int = 18
     user_cat_tables: dict = field(default_factory=lambda: {})
 
     # summary
     summary_numeric_dim: int = 36
     summary_cat_tables: dict = field(default_factory=dict)
 
-    # account
-    account_numeric_dim: int = 8
+    # account（8 基础 + 2 specialTrades + 1 account_age + 4 ratio = 15；6 类账户共享同一 encoder）
+    account_numeric_dim: int = 15
     account_cat_tables: dict = field(default_factory=dict)
     paystate_vocab_size: int = PAYSTATE_VOCAB_SIZE
 
@@ -58,6 +60,11 @@ class PbcCreditModelConfig:
     # public
     public_numeric_dim: int = 2
     public_type_vocab_size: int = PUBLIC_TYPE_VOCAB_SIZE
+
+    # obligation（agreement + postpay + related_repay 合并）
+    obligation_numeric_dim: int = 2
+    obligation_type_vocab_size: int = OBLIGATION_TYPE_VOCAB_SIZE
+    obligation_cat_tables: dict = field(default_factory=dict)
 
 
 def _summary_field_counts():
@@ -245,7 +252,7 @@ class PbcCreditModel(nn.Module):
             config.summary_numeric_dim + self.summary_cat_emb.out_dim, d, config.dropout,
         )
 
-        # === accounts (shared by 5 types) ===
+        # === accounts (shared by 6 types: D1/R1/R2/R3/R4/C1) ===
         acc_cat_sizes = config.account_cat_tables
         self.acc_cat_emb = CategoricalEmbedding(acc_cat_sizes, embed_dim=4)
         self.acc_seq_encoder = SeqEncoder(
@@ -274,15 +281,25 @@ class PbcCreditModel(nn.Module):
             d, config.n_heads, config.n_layers, config.dropout,
         )
 
+        # === obligations（agreement + postpay + related_repay 合并）===
+        obl_cat_sizes = config.obligation_cat_tables
+        # 第 0 列 type 走 type embed；第 1/2 列 cat 走 CategoricalEmbedding
+        self.obligation_type_emb = nn.Embedding(config.obligation_type_vocab_size + 1, 4)
+        self.obligation_cat_emb = CategoricalEmbedding(obl_cat_sizes, embed_dim=4)
+        self.obligation_encoder = SeqEncoder(
+            config.obligation_numeric_dim + 4 + self.obligation_cat_emb.out_dim,
+            d, config.n_heads, config.n_layers, config.dropout,
+        )
+
         # === interactive pairs (3) ===
         self.int_aa = InteractiveModule(d, config.n_heads, config.dropout)  # d1 × r2
         self.int_aq = InteractiveModule(d, config.n_heads, config.dropout)  # accounts × queries
         self.int_ap = InteractiveModule(d, config.n_heads, config.dropout)  # accounts × publics
 
         # === top (finetune) ===
-        # 11 pooled vectors: user, summary, d1, r1, r2, r3, r4, query, public, int_aa, int_aq, int_ap
-        # 实际是 12 个，但 int_aa 也算 1 个
-        n_pooled = 12
+        # 14 pooled vectors: user, summary, d1, r1, r2, r3, r4, c1, query, public, obligation,
+        #                    int_aa, int_aq, int_ap
+        n_pooled = 14
         self.top = nn.Sequential(
             nn.Linear(d * n_pooled, config.top_hidden),
             nn.ReLU(),
@@ -297,11 +314,15 @@ class PbcCreditModel(nn.Module):
             self.query_mask_head = nn.Linear(d, config.query_numeric_dim)
             self.public_mask_head = nn.Linear(d, config.public_numeric_dim)
             self.summary_mask_head = nn.Linear(d, config.summary_numeric_dim)
+            self.obligation_mask_head = nn.Linear(d, config.obligation_numeric_dim)
 
     def _encode_accounts(self, batch: dict):
-        """对 5 类账户共享同一套 encoder，返回 dict[type] = (pooled, tokens, pay_per_month)."""
+        """对 6 类账户（d1/r1/r2/r3/r4/c1）共享同一套 encoder。
+
+        返回 dict[type] = (pooled, tokens, pay_per_month).
+        """
         results = {}
-        for t in ['d1', 'r1', 'r2', 'r3', 'r4']:
+        for t in ['d1', 'r1', 'r2', 'r3', 'r4', 'c1']:
             numeric = batch[f'{t}_numeric']  # [B, N, Fn]
             cat_ids = batch[f'{t}_cat_ids']
             paystate = batch[f'{t}_paystate']
@@ -345,9 +366,16 @@ class PbcCreditModel(nn.Module):
         p_feats = torch.cat([batch['public_numeric'], p_cat], dim=-1)
         public_h, public_tokens = self.public_encoder(p_feats, batch['public_mask'])
 
+        # obligations
+        o_type_ids = batch['obligation_cat_ids'][..., 0].clamp_min(0)  # [B, N]
+        o_type_emb = self.obligation_type_emb(o_type_ids)  # [B, N, 4]
+        o_cat_flat = self.obligation_cat_emb(batch['obligation_cat_ids'][..., 1:])  # [B, N, 2*embed]
+        o_feats = torch.cat([batch['obligation_numeric'], o_type_emb, o_cat_flat], dim=-1)
+        obligation_h, obligation_tokens = self.obligation_encoder(o_feats, batch['obligation_mask'])
+
         if self.pretrain_mode:
             return self._forward_pretrain(
-                batch, accs, query_tokens, public_tokens, summary_h,
+                batch, accs, query_tokens, public_tokens, summary_h, obligation_tokens,
             )
 
         # === interactive ===
@@ -356,6 +384,7 @@ class PbcCreditModel(nn.Module):
         r2_p, r2_t, _ = accs['r2']
         r3_p, r3_t, _ = accs['r3']
         r4_p, r4_t, _ = accs['r4']
+        c1_p, c1_t, _ = accs['c1']
 
         int_aa = self.int_aa(d1_t, batch['d1_mask'], r2_t, batch['r2_mask'])
 
@@ -370,18 +399,20 @@ class PbcCreditModel(nn.Module):
         # === concat + top ===
         pooled_list = [
             user_h, summary_h,
-            d1_p, r1_p, r2_p, r3_p, r4_p,
-            query_h, public_h,
+            d1_p, r1_p, r2_p, r3_p, r4_p, c1_p,
+            query_h, public_h, obligation_h,
             int_aa, int_aq, int_ap,
         ]
         concat = torch.cat(pooled_list, dim=-1)
         logit = self.top(concat)
         return logit
 
-    def _forward_pretrain(self, batch, accs, query_tokens, public_tokens, summary_h):
+    def _forward_pretrain(self, batch, accs, query_tokens, public_tokens, summary_h, obligation_tokens):
         out = {}
-        # accounts numeric + paystate reconstruction
-        for t in ['d1', 'r1', 'r2', 'r3', 'r4']:
+        # 暴露 summary_emb 给 contrastive consistency loss 用
+        out['summary_emb'] = summary_h  # [B, d]
+        # accounts numeric + paystate reconstruction（6 类共享 mask head）
+        for t in ['d1', 'r1', 'r2', 'r3', 'r4', 'c1']:
             pooled, tokens, pay_per_month = accs[t]
 
             pos = batch.get(f'{t}_masked_pos')
@@ -411,5 +442,10 @@ class PbcCreditModel(nn.Module):
             s_pred_flat = self.summary_mask_head(summary_h)
             out['summary_numeric_pred'] = s_pred_flat[s_pos]
             out['summary_numeric_target'] = batch['summary_numeric_raw'][s_pos]
+
+        o_pos = batch.get('obligation_masked_pos')
+        if o_pos is not None and o_pos.any():
+            out['obligation_numeric_pred'] = self.obligation_mask_head(obligation_tokens[o_pos])
+            out['obligation_numeric_target'] = batch['obligation_numeric_raw'][o_pos]
 
         return out

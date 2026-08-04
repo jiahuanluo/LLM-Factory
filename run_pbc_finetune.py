@@ -1,47 +1,63 @@
-"""Finetune PbcCreditModel for binary classification.
+"""Finetune PbcCreditModel via HF Trainer (multi-GPU via torchrun).
 
 Usage:
   python run_pbc_finetune.py configs/pbc_finetune.yaml
+  torchrun --nproc_per_node=8 run_pbc_finetune.py configs/pbc_finetune.yaml
 """
 from __future__ import annotations
 
-import argparse
 import json
-import random
+import os
 import sys
-import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
-import numpy as np
 import torch
-import yaml
 from torch.utils.data import DataLoader
+from transformers import HfArgumentParser, Trainer, TrainingArguments
 
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
 from pbc_credit.collator import PbcCollator
 from pbc_credit.dataset import PbcDataset
-from pbc_credit.fields import (
-    USER_CAT_FIELDS, ACCOUNT_CAT_FIELDS, QUERY_CAT_FIELDS,
-    SUMMARY_TABLES, PAYSTATE_VOCAB_SIZE, PUBLIC_TYPE_VOCAB_SIZE,
-)
 from pbc_credit.losses import finetune_loss, compute_auc, compute_ks
-from pbc_credit.model import PbcCreditModel, PbcCreditModelConfig
+from pbc_credit.model import PbcCreditModel
 from run_pbc_pretrain import build_model_cfg
 
 
-def load_cfg(path: str) -> dict:
-    with open(path) as f:
-        return yaml.safe_load(f)
+# ============================================================
+# Arguments
+# ============================================================
 
+@dataclass
+class PbcFinetuneModelArguments:
+    d: int = field(default=128)
+    n_heads: int = field(default=4)
+    n_layers: int = field(default=2)
+    dropout: float = field(default=0.1)
+    init_from_pretrain: str | None = field(default=None,
+        metadata={"help": "Path to encoder_state.pt from pretrain"})
+    pos_weight: float = field(default=4.0)
+
+
+@dataclass
+class PbcDataArguments:
+    train_samples: str = field(default=None)
+    val_samples: str = field(default=None)
+    cat_vocab: str = field(default=None)
+
+
+# ============================================================
+# Eval helper (reused from old script)
+# ============================================================
 
 @torch.no_grad()
-def evaluate(model, loader, device, pos_weight):
+def evaluate_finetune(model, val_loader, device, pos_weight: float) -> dict:
     model.eval()
     all_probs, all_labels = [], []
     total_loss = 0.0
     n = 0
-    for batch in loader:
+    for batch in val_loader:
         batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
         logits = model(batch)
         loss = finetune_loss(logits, batch['target'], pos_weight=pos_weight)
@@ -50,8 +66,9 @@ def evaluate(model, loader, device, pos_weight):
         all_labels.append(batch['target'].cpu())
         total_loss += loss.item() * len(probs)
         n += len(probs)
-    probs = torch.cat(all_probs)
-    labels = torch.cat(all_labels)
+    probs = torch.cat(all_probs) if all_probs else torch.empty(0)
+    labels = torch.cat(all_labels) if all_labels else torch.empty(0)
+    model.train()
     return {
         'loss': total_loss / max(n, 1),
         'auc': compute_auc(probs, labels),
@@ -59,142 +76,102 @@ def evaluate(model, loader, device, pos_weight):
     }
 
 
+# ============================================================
+# Trainer subclass
+# ============================================================
+
+class PbcFineTrainer(Trainer):
+    def __init__(self, *args, pos_weight: float = 4.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.pos_weight = pos_weight
+
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        logits = model(inputs)
+        target = inputs['target']
+        loss = finetune_loss(logits, target, pos_weight=self.pos_weight)
+        if return_outputs:
+            return loss, logits
+        return loss
+
+    def evaluate(self, eval_dataset=None, ignore_keys=None, metric_key_prefix='eval'):
+        eval_ds = eval_dataset if eval_dataset is not None else self.eval_dataset
+        if eval_ds is None:
+            return {}
+        loader = self.get_eval_dataloader(eval_ds)
+        metrics = evaluate_finetune(self.model, loader, self.args.device, self.pos_weight)
+        out = {f'{metric_key_prefix}_{k}': v for k, v in metrics.items()}
+        self.log(out)
+        return out
+
+
+# ============================================================
+# Main
+# ============================================================
+
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('config', help='YAML config path')
-    args = parser.parse_args()
+    parser = HfArgumentParser((PbcFinetuneModelArguments, PbcDataArguments, TrainingArguments))
+    if len(sys.argv) == 2 and sys.argv[1].endswith('.yaml'):
+        model_args, data_args, training_args = parser.parse_yaml_file(sys.argv[1])
+    else:
+        model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
-    cfg = load_cfg(args.config)
-    print(f'=== Config ===\n{yaml.safe_dump(cfg, default_flow_style=False)}')
-
-    torch.manual_seed(cfg.get('seed', 42))
-    np.random.seed(cfg.get('seed', 42))
-    random.seed(cfg.get('seed', 42))
-
-    out_dir = Path(cfg['output_dir'])
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    # === Data ===
-    print('=== Loading datasets ===')
-    train_ds = PbcDataset(cfg['train_samples'])
-    val_ds = PbcDataset(cfg['val_samples'])
-    print(f'  train: {len(train_ds):,}')
-    print(f'  val:   {len(val_ds):,}')
-
-    collator = PbcCollator()
-    train_loader = DataLoader(
-        train_ds, batch_size=cfg['batch_size'], shuffle=True,
-        collate_fn=collator, num_workers=cfg.get('num_workers', 0),
-        pin_memory=True, drop_last=True,
-    )
-    val_loader = DataLoader(
-        val_ds, batch_size=cfg['batch_size'] * 2, shuffle=False,
-        collate_fn=collator, num_workers=cfg.get('num_workers', 0),
-        pin_memory=True,
-    )
-
-    # === Model ===
-    with open(cfg['cat_vocab']) as f:
+    with open(data_args.cat_vocab) as f:
         vocab = json.load(f)
-    model_cfg = build_model_cfg(cfg, vocab)
+    model_cfg = build_model_cfg(model_args, vocab)
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = PbcCreditModel(model_cfg, pretrain_mode=False).to(device)
 
-    # Load pretrained
-    init_from = cfg.get('init_from_pretrain')
-    if init_from and Path(init_from).exists():
-        ckpt = torch.load(init_from, map_location=device, weights_only=False)
+    # Load pretrained encoder
+    if model_args.init_from_pretrain and Path(model_args.init_from_pretrain).exists():
+        ckpt = torch.load(model_args.init_from_pretrain, map_location=device, weights_only=False)
         state = ckpt['model_state']
         own = model.state_dict()
         loaded = {k: v for k, v in state.items() if k in own and own[k].shape == v.shape}
         own.update(loaded)
         model.load_state_dict(own)
-        print(f'=== Loaded {len(loaded)}/{len(own)} tensors from {init_from} ===')
+        print(f'=== Loaded {len(loaded)}/{len(own)} tensors from {model_args.init_from_pretrain} ===')
     else:
         print('=== No pretrain init; training from scratch ===')
 
     n_params = sum(p.numel() for p in model.parameters())
     print(f'=== Model: {n_params:,} params ({n_params/1e6:.2f}M), device={device} ===')
 
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=cfg['lr'],
-        weight_decay=cfg.get('weight_decay', 0.01),
-        betas=(0.9, 0.98), eps=1e-6,
+    # === Datasets ===
+    train_ds = PbcDataset(data_args.train_samples, pretrain_mode=False)
+    eval_ds = PbcDataset(data_args.val_samples, pretrain_mode=False)
+    print(f'  train: {len(train_ds):,}')
+    print(f'  val:   {len(eval_ds):,}')
+
+    trainer = PbcFineTrainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_ds,
+        eval_dataset=eval_ds,
+        data_collator=PbcCollator(),
+        pos_weight=model_args.pos_weight,
     )
-    total_steps = len(train_loader) * cfg['epochs']
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(
-        optimizer, max_lr=cfg['lr'], total_steps=total_steps, pct_start=0.1,
-    )
 
-    log_path = out_dir / 'finetune.log'
-    log_file = open(log_path, 'w')
+    last_ckpt = None
+    if os.path.isdir(training_args.output_dir) and not training_args.overwrite_output_dir:
+        from transformers.trainer_utils import get_last_checkpoint
+        try:
+            last_ckpt = get_last_checkpoint(training_args.output_dir)
+            if last_ckpt:
+                print(f'=== Resuming from {last_ckpt} ===')
+        except Exception:
+            pass
 
-    def log(msg):
-        print(msg)
-        log_file.write(msg + '\n')
-        log_file.flush()
+    train_result = trainer.train(resume_from_checkpoint=last_ckpt)
+    trainer.save_model()
+    trainer.log_metrics('train', train_result.metrics)
+    trainer.save_metrics('train', train_result.metrics)
+    trainer.save_state()
 
-    log(f'=== Training: {cfg["epochs"]} epochs x {len(train_loader)} steps = {total_steps} steps ===')
-
-    best_auc = -1.0
-    global_step = 0
-    eval_every = cfg.get('eval_per_epoch_steps', 100)
-    start_time = time.time()
-
-    for epoch in range(cfg['epochs']):
-        model.train()
-        epoch_loss = 0.0
-        n_batches = 0
-
-        for batch in train_loader:
-            batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
-
-            optimizer.zero_grad()
-            logits = model(batch)
-            loss = finetune_loss(logits, batch['target'], pos_weight=cfg.get('pos_weight', 1.0))
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
-            scheduler.step()
-
-            epoch_loss += loss.item()
-            n_batches += 1
-            global_step += 1
-
-            if global_step % cfg.get('log_every', 20) == 0:
-                elapsed = time.time() - start_time
-                sps = global_step / elapsed
-                eta_min = (total_steps - global_step) / max(sps, 1e-9) / 60
-                cur_lr = scheduler.get_last_lr()[0]
-                log(f'  [ep{epoch} step {global_step}/{total_steps}] '
-                    f'loss={loss.item():.4f}  lr={cur_lr:.2e}  sps={sps:.1f}  eta={eta_min:.1f}m')
-
-            if global_step % eval_every == 0:
-                metrics = evaluate(model, val_loader, device, cfg.get('pos_weight', 1.0))
-                log(f'  [eval step {global_step}] loss={metrics["loss"]:.4f} '
-                    f'auc={metrics["auc"]:.4f}  ks={metrics["ks"]:.4f}')
-                if metrics['auc'] > best_auc:
-                    best_auc = metrics['auc']
-                    torch.save({
-                        'model_state': model.state_dict(),
-                        'metrics': metrics,
-                        'step': global_step,
-                    }, out_dir / 'best.pt')
-                    log(f'    ★ new best AUC={best_auc:.4f} saved')
-                model.train()
-
-        avg = epoch_loss / max(n_batches, 1)
-        log(f'=== Epoch {epoch} done: avg_loss={avg:.4f} ===')
-
-    # final eval
-    metrics = evaluate(model, val_loader, device, cfg.get('pos_weight', 1.0))
-    log(f'=== Final eval: loss={metrics["loss"]:.4f} auc={metrics["auc"]:.4f} '
-        f'ks={metrics["ks"]:.4f} (best AUC={best_auc:.4f}) ===')
-    with open(out_dir / 'eval_results.json', 'w') as f:
-        json.dump({'final': metrics, 'best_auc': best_auc}, f, indent=2)
-
-    log_file.close()
-    print(f'\n=== Finetune done. Total: {(time.time()-start_time)/60:.1f} min ===')
+    if eval_ds is not None:
+        metrics = trainer.evaluate(metric_key_prefix='eval')
+        trainer.log_metrics('eval', metrics)
+        trainer.save_metrics('eval', metrics)
 
 
 if __name__ == '__main__':

@@ -1,5 +1,8 @@
-# PBC 预训练（HF Trainer）— 标准训练配置
-# 多卡启动：torchrun --nproc_per_node=N run_pbc_pretrain.py configs/pbc_pretrain.yaml
+# PBC 预训练全量：698 份报告（598 base + 100 diverse）
+pretrain_samples:
+  - data/pbc/processed/train.jsonl
+val_samples: data/pbc/processed/val.jsonl
+cat_vocab: data/pbc/processed/cat_vocab.json
 
 # === PbcModelArguments ===
 d: 128
@@ -7,19 +10,14 @@ n_heads: 4
 n_layers: 2
 dropout: 0.1
 mask_ratio: 0.15
-ema_decay: 0.99
+ema_decay: 0.95
 mask_seed: 12345
-
-# === PbcDataArguments ===
-pretrain_samples:
-  - data/pbc/processed/train.jsonl
-val_samples: data/pbc/processed/val.jsonl
-cat_vocab: data/pbc/processed/cat_vocab.json
+contrastive_weight: 0.1   # P0 B1
 
 # === TrainingArguments ===
-output_dir: output/pbc_pretrained
+output_dir: tmp/pbc_pretrain_full
 
-num_train_epochs: 2
+num_train_epochs: 5
 per_device_train_batch_size: 8
 per_device_eval_batch_size: 16
 learning_rate: 1.0e-4
@@ -34,7 +32,7 @@ eval_strategy: steps
 eval_steps: 50
 save_strategy: steps
 save_steps: 50
-save_total_limit: 3
+save_total_limit: 2
 load_best_model_at_end: true
 metric_for_best_model: eval_total
 greater_is_better: false

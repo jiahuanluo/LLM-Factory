@@ -26,6 +26,8 @@ from .fields import (
     QUERY_CAT_FIELDS, QUERY_NUMERIC_FIELDS,
     PUBLIC_TYPES, PUBLIC_TYPE_VOCAB,
     PAYSTATE_VOCAB, PAYSTATE_VOCAB_SIZE,
+    OBLIGATION_TYPES, OBLIGATION_TYPE_VOCAB, OBLIGATION_TYPE_VOCAB_SIZE,
+    OBLIGATIONS_CAT_FIELDS, OBLIGATION_AMOUNT_FIELD, OBLIGATION_DATE_FIELD,
 )
 from .vocab import build_cat_vocab, save_vocab, load_vocab, encode_value
 
@@ -87,7 +89,10 @@ def _safe_float(v, default=float('nan')) -> float:
 
 
 def build_user(report: dict, ref: datetime.datetime) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """返回 (numeric[U_n], cat_ids[U_c], cat_mask[U_c])。"""
+    """返回 (numeric[U_n=14], cat_ids[U_c], cat_mask[U_c])。
+
+    numeric 维度 14：基础 10 + score 4（score 仅 ~5% 报告含，缺失填 0 + score_present=0）。
+    """
     # numeric
     identity = get_path(report, 'personInfo.identity', {}) or {}
     mobiles = get_path(report, 'personInfo.identity.mobiles', []) or []
@@ -118,6 +123,38 @@ def build_user(report: dict, ref: datetime.datetime) -> tuple[torch.Tensor, torc
             except (ValueError, TypeError):
                 pass
 
+    # 稳定性衍生 1：最近一份工作结束距今（0=在职）
+    job_end_dt = None
+    if professionals:
+        job_end_dt = parse_date(professionals[0].get('pb040r02'))
+    years_since_job_end = years_since(job_end_dt, ref) if job_end_dt else 0.0
+    if np.isnan(years_since_job_end):
+        years_since_job_end = 0.0
+
+    # 稳定性衍生 2：当前居住地址居住年限
+    address_start_dt = None
+    if residences:
+        address_start_dt = parse_date(residences[0].get('pb030r01'))
+    years_at_address = years_since(address_start_dt, ref) if address_start_dt else 0.0
+    if np.isnan(years_at_address):
+        years_at_address = 0.0
+
+    # 稳定性衍生 3：婚姻状态变更次数（pb020d02 直接数值化）
+    marriage_change_count = _safe_float(marriage.get('pb020d02'), 0.0) if marriage else 0.0
+
+    # score 块（4.7% 报告含；缺失时 5 项全 0，score_present=0）
+    score = report.get('score') or {}
+    score_present = 1.0 if score else 0.0
+    score_value = _safe_float(score.get('pc010q01'), 0.0) if score else 0.0
+    score_rank = _safe_float(score.get('pc010q02'), 0.0) if score else 0.0
+    score_qcount = _safe_float(score.get('pc010s01'), 0.0) if score else 0.0
+    # pc010d01 是逗号分隔的多机构编号串（如 "11,01"）→ 计数为机构数
+    pc010d01 = score.get('pc010d01') if score else None
+    if pc010d01 and isinstance(pc010d01, str) and pc010d01.strip():
+        score_num_inst = float(len([x for x in pc010d01.split(',') if x.strip()]))
+    else:
+        score_num_inst = 0.0
+
     numeric_values = [
         age,
         float(len(mobiles)),
@@ -129,6 +166,16 @@ def build_user(report: dict, ref: datetime.datetime) -> tuple[torch.Tensor, torc
         years_since(employer_year, ref),
         1.0 if identity.get('pb01aq01') else 0.0,
         float(len(identity_others)),
+        # 稳定性衍生 3 项
+        years_since_job_end,
+        years_at_address,
+        marriage_change_count,
+        # score 5 项
+        score_value,
+        score_rank,
+        score_qcount,
+        score_num_inst,
+        score_present,
     ]
     numeric = torch.tensor(numeric_values, dtype=torch.float32)
 
@@ -160,6 +207,10 @@ def build_summary(report: dict) -> tuple[list[float], list[Any], list[int]]:
     for name, is_list, num_fields, cat_fields in SUMMARY_TABLES:
         node = sinfo.get(name)
         if node is None:
+            # 重要：维度必须与 model_cfg.summary_numeric_dim 一致。
+            # is_list 时即使 node 缺失，也要补一个 count=0 占位。
+            if is_list:
+                nums.append(0.0)
             for _ in num_fields:
                 nums.append(0.0)
             for _ in cat_fields:
@@ -187,11 +238,14 @@ def build_summary(report: dict) -> tuple[list[float], list[Any], list[int]]:
 
 
 def _parse_paystate_to_60(report_account: dict) -> list[int]:
-    """从 latest5year 或 latest24PayState 提取 60 月还款状态 id 序列。"""
+    """从 latest5year / latest24PayState 提取 60 月还款状态 id 序列。
+
+    若 latestMonthPayState.pd01cd01 存在，覆盖最后一月（更权威的最新状态）。
+    """
     # 优先 latest5year.latest5yearDetails（list of dict）
     det = get_path(report_account, 'latest5year.latest5yearDetails')
+    states: list[str] = []
     if det and isinstance(det, list) and len(det) > 0:
-        states = []
         for row in det:
             s = row.get('pd01ed01', '')
             ch = str(s).strip()[:1].upper() if s else ''
@@ -200,23 +254,30 @@ def _parse_paystate_to_60(report_account: dict) -> list[int]:
         states = states[-60:]
         # pad left to 60
         states = ['<PAD>'] * (60 - len(states)) + states
-        return [PAYSTATE_VOCAB.get(ch if ch != '<PAD>' else '<PAD>', 1) for ch in states]
+    else:
+        # fallback: latest24PayState.latest24state (24-char string)
+        s24 = get_path(report_account, 'latest24PayState.latest24state')
+        if s24 and isinstance(s24, str):
+            chars = list(s24.upper())[-24:]
+            chars = ['<PAD>'] * (24 - len(chars)) + chars
+            # left pad to 60 with PAD
+            states = ['<PAD>'] * (60 - len(chars)) + chars
+        else:
+            states = ['<PAD>'] * 60
 
-    # fallback: latest24PayState.latest24state (24-char string)
-    s24 = get_path(report_account, 'latest24PayState.latest24state')
-    if s24 and isinstance(s24, str):
-        chars = list(s24.upper())[-24:]
-        chars = ['<PAD>'] * (24 - len(chars)) + chars
-        # left pad to 60 with PAD
-        chars = ['<PAD>'] * (60 - len(chars)) + chars
-        return [PAYSTATE_VOCAB.get(c, 1) if c != '<PAD>' else 0 for c in chars]
+    # latestMonthPayState.pd01cd01 覆盖最后一月（更权威的最新状态）
+    lms = report_account.get('latestMonthPayState') if isinstance(report_account, dict) else None
+    if isinstance(lms, dict):
+        v = lms.get('pd01cd01')
+        if v is not None and str(v).strip():
+            states[-1] = str(v).strip()[:1].upper()
 
-    # 全空
-    return [0] * 60
+    return [PAYSTATE_VOCAB.get(ch if ch != '<PAD>' else '<PAD>', 1) if ch != '<PAD>' else 0
+            for ch in states]
 
 
-def build_accounts(report: dict) -> dict[str, dict]:
-    """按 pd01ad01 分桶返回 5 类账户。"""
+def build_accounts(report: dict, ref: datetime.datetime) -> dict[str, dict]:
+    """按 pd01ad01 分桶返回 6 类账户（D1/R1/R2/R3/R4/C1）。"""
     accs = get_path(report, 'accountInfos', []) or []
     by_type: dict[str, list[dict]] = {t: [] for t in ACCOUNT_TYPES}
     for a in accs:
@@ -237,14 +298,56 @@ def build_accounts(report: dict) -> dict[str, dict]:
         for i, a in enumerate(items):
             basic = a.get('accountBasic', {}) or {}
             latest = a.get('latestInfo', {}) or {}
-            # numeric（合并 basic + latestInfo）+ log1p 压缩大金额
+            # numeric（合并 basic + latestInfo + specialTrades 衍生）+ log1p 压缩大金额
             for j, f in enumerate(ACCOUNT_NUMERIC_FIELDS):
-                v = basic.get(f) or latest.get(f)
-                fv = _safe_float(v)
-                if abs(fv) > 1000:
-                    import math
-                    fv = math.copysign(math.log1p(abs(fv)), fv)
-                numeric[i, j] = fv
+                if f == '__special_trades_count__':
+                    st = a.get('specialTrades') or []
+                    st = st if isinstance(st, list) else []
+                    numeric[i, j] = float(len(st))
+                elif f == '__special_trades_amount__':
+                    st = a.get('specialTrades') or []
+                    st = st if isinstance(st, list) else []
+                    total = 0.0
+                    for it in st:
+                        if isinstance(it, dict):
+                            for k, v in it.items():
+                                if 'j01' in k.lower():
+                                    total += _safe_float(v, 0.0)
+                                    break
+                    if abs(total) > 1000:
+                        import math
+                        total = math.copysign(math.log1p(abs(total)), total)
+                    numeric[i, j] = total
+                elif f == '__account_age_years__':
+                    # 账户账龄：pd01ar01 开户日距 ref 的年份；缺失=0
+                    open_dt = parse_date(basic.get('pd01ar01'))
+                    age_y = years_since(open_dt, ref) if open_dt else 0.0
+                    if np.isnan(age_y):
+                        age_y = 0.0
+                    numeric[i, j] = age_y
+                elif f == '__utilization_ratio__':
+                    granted = _safe_float(basic.get('pd01aj01'), 0.0)
+                    cur_bal = _safe_float(basic.get('pd01bj01') or latest.get('pd01bj01'), 0.0)
+                    numeric[i, j] = (cur_bal / granted) if granted > 0 else 0.0
+                elif f == '__repayment_progress__':
+                    granted = _safe_float(basic.get('pd01aj01'), 0.0)
+                    paid = _safe_float(basic.get('pd01aj03'), 0.0)
+                    numeric[i, j] = (paid / granted) if granted > 0 else 0.0
+                elif f == '__overdue_ratio__':
+                    cur_bal = _safe_float(basic.get('pd01bj01') or latest.get('pd01bj01'), 0.0)
+                    overdue = _safe_float(basic.get('pd01bj02') or latest.get('pd01bj02'), 0.0)
+                    numeric[i, j] = (overdue / cur_bal) if cur_bal > 0 else 0.0
+                elif f == '__tenure_ratio__':
+                    period = _safe_float(basic.get('pd01ad05'), 0.0)
+                    used = _safe_float(basic.get('pd01as01'), 0.0)
+                    numeric[i, j] = (used / period) if period > 0 else 0.0
+                else:
+                    v = basic.get(f) or latest.get(f)
+                    fv = _safe_float(v)
+                    if abs(fv) > 1000:
+                        import math
+                        fv = math.copysign(math.log1p(abs(fv)), fv)
+                    numeric[i, j] = fv
             # cat
             for j, (f, _t) in enumerate(ACCOUNT_CAT_FIELDS):
                 v = basic.get(f)
@@ -292,23 +395,54 @@ def build_queries(report: dict, ref: datetime.datetime) -> tuple[list[list[float
 def build_publics(report: dict, ref: datetime.datetime) -> tuple[list[list[float]], list[list[Any]], list[list[int]]]:
     """统一映射为 (type_id, amount, days_ago) 序列。
 
-    注意：publicInfo 下子表字段名各异（PF01J01/PF02AJ01 等），这里用启发式扫描
-    'j01'（金额）/ 'r01'（日期）子串。生产环境如果字段名规范，可以改为 fields.py
-    里的显式字段映射（见 PUBLIC_TYPES 注释）。
+    查找顺序：
+      1. 显式：PUBLIC_TYPES 的 xml_node 末段（pco_pf01 → pf01）
+      2. 启发式：扫描 publicInfo 下所有 list 子表，按 key 名做语义匹配（ camelCase 如
+         'taxarrears' / 'civilJudgements' / 'forceExecutions' 等）
+    每条记录里 'j01' 子串 → 金额，'r01' 子串 → 日期。
     """
     import math
     pinfo = get_path(report, 'publicInfo', {}) or {}
     nums: list[list[float]] = []
     cats: list[list[Any]] = []
     cmask: list[list[int]] = []
+
+    type_by_name = {name: name for _xml, name in PUBLIC_TYPES}
+    key_aliases = {
+        'taxarrears': 'taxes', 'taxes': 'taxes',
+        'civiljudgements': 'judgments', 'judgments': 'judgments',
+        'forceexecutions': 'enforcement', 'enforcement': 'enforcement',
+        'adminpunishments': 'penalties', 'penalties': 'penalties',
+        'salvations': 'low_income_relief', 'lowincomerelief': 'low_income_relief',
+        'accfunds': 'interest_arrears',
+        'competences': 'professional_qual', 'professionalqual': 'professional_qual',
+        'adminawards': 'awards', 'awards': 'awards',
+    }
+
+    # 收集候选 (items_list, type_name)
+    candidates: list[tuple[list, str]] = []
+    # 1. 显式 PUBLIC_TYPES 查找
     for xml_node, type_name in PUBLIC_TYPES:
         key = xml_node.split('_')[-1]
-        items = pinfo.get(key) or pinfo.get(key.upper())
-        if not items:
+        items = pinfo.get(key) or pinfo.get(key.upper()) or pinfo.get(key.lower())
+        if items:
+            items = [items] if isinstance(items, dict) else items
+            candidates.append((items, type_name))
+    # 2. 兜底：扫描所有 list 子表，按 key 别名归类
+    seen_keys = set()
+    for k_top, v in pinfo.items():
+        if k_top in seen_keys:
             continue
-        if isinstance(items, dict):
-            items = [items]
+        if isinstance(v, list) and v:
+            alias = key_aliases.get(k_top.lower().replace('-', '').replace('_', ''))
+            type_name = type_by_name.get(alias, 'taxes')  # 默认归类
+            candidates.append((v, type_name))
+            seen_keys.add(k_top)
+
+    for items, type_name in candidates:
         for it in items:
+            if not isinstance(it, dict):
+                continue
             amount = 0.0
             for k, v in it.items():
                 if 'j01' in k.lower():
@@ -322,12 +456,86 @@ def build_publics(report: dict, ref: datetime.datetime) -> tuple[list[list[float
                         days_ago = 0.0
                     days_ago = math.log1p(max(0.0, days_ago))
                     break
-            # amount 也压缩
             if abs(amount) > 1000:
                 amount = math.copysign(math.log1p(abs(amount)), amount)
             nums.append([amount, days_ago])
             cats.append([type_name])
             cmask.append([1])
+    return nums, cats, cmask
+
+
+def build_obligations(report: dict, ref: datetime.datetime) -> tuple[list[list[float]], list[list[Any]], list[list[int]]]:
+    """合并 agreementInfos + postpays + relatedRepayDutyInfos → 统一 obligation 序列。
+
+    每条记录编码为：
+      numeric = [amount_log1p, days_ago_log1p]  （两个字段；缺失填 0）
+      cat_values = [obligation_type, ag_f1, ag_f2, pp_f1, pp_f2, rr_f1, rr_f2]
+        - obligation_type: 'agreement' / 'postpay' / 'related_repay'
+        - 后 6 列：按 type 填对应两列，其它列填 None（mask=0）
+      cat_mask = [1, b_ag_f1, b_ag_f2, b_pp_f1, b_pp_f2, b_rr_f1, b_rr_f2]
+    """
+    import math
+
+    nums: list[list[float]] = []
+    cats: list[list[Any]] = []
+    cmask: list[list[int]] = []
+
+    # 三类源数据
+    sources = [
+        ('agreement', (report.get('agreementInfos') or [])),
+        ('postpay', (report.get('postpays') or [])),
+        ('related_repay', (report.get('relatedRepayDutyInfos') or [])),
+    ]
+    # 每类的 cat 字段（按顺序）；OBLIGATIONS_CAT_FIELDS 顺序保证 6 列布局稳定
+    cat_fields_by_type: dict[str, list[str]] = {t: [] for t in OBLIGATION_TYPES}
+    for t, f, _table in OBLIGATIONS_CAT_FIELDS:
+        cat_fields_by_type[t].append(f)
+
+    for obl_type, items in sources:
+        if not items or not isinstance(items, list):
+            continue
+        amount_field = OBLIGATION_AMOUNT_FIELD.get(obl_type)
+        date_field = OBLIGATION_DATE_FIELD.get(obl_type)
+        for raw in items:
+            if not isinstance(raw, dict):
+                continue
+            # agreement 数据嵌在 agreementBasic 下；其它两类扁平
+            node = raw.get('agreementBasic', raw) if obl_type == 'agreement' else raw
+
+            # numeric: amount + days_ago
+            amount = 0.0
+            if amount_field:
+                amount = _safe_float(node.get(amount_field), 0.0)
+            if abs(amount) > 1000:
+                amount = math.copysign(math.log1p(abs(amount)), amount)
+
+            days_ago = 0.0
+            if date_field:
+                d = parse_date(node.get(date_field))
+                if d is not None:
+                    da = days_since(d, ref)
+                    if not np.isnan(da):
+                        days_ago = math.log1p(max(0.0, da))
+
+            nums.append([amount, days_ago])
+
+            # cat: [type, ag_f1, ag_f2, pp_f1, pp_f2, rr_f1, rr_f2] = 7 列
+            cat_row: list[Any] = [obl_type]
+            cmask_row: list[int] = [1]
+            for t in OBLIGATION_TYPES:  # 按固定 type 顺序填 6 列
+                fields = cat_fields_by_type[t]
+                if t == obl_type:
+                    for f in fields:
+                        v = node.get(f)
+                        cat_row.append(v)
+                        cmask_row.append(0 if (v is None or v == '') else 1)
+                else:
+                    for _f in fields:
+                        cat_row.append(None)
+                        cmask_row.append(0)
+            cats.append(cat_row)
+            cmask.append(cmask_row)
+
     return nums, cats, cmask
 
 
@@ -357,7 +565,7 @@ def build_sample(report: dict, vocab: dict | None = None) -> dict:
     sample['_summary_cat_values'] = s_cat
 
     # accounts
-    accounts = build_accounts(report)
+    accounts = build_accounts(report, ref)
     for t in ACCOUNT_TYPES:
         item = accounts[t]
         sample[f'{t.lower()}_numeric'] = item['numeric']
@@ -388,6 +596,15 @@ def build_sample(report: dict, vocab: dict | None = None) -> dict:
     sample['public_cat_mask'] = torch.tensor(p_cmask, dtype=torch.long) if p_cmask else torch.zeros(0, 1, dtype=torch.long)
     sample['public_mask'] = torch.ones(n_p, dtype=torch.long)
     sample['_public_cat_values'] = p_cat
+
+    # obligations（agreement + postpay + related_repay 合并；7 列 cat = type + 6 field positions）
+    o_num, o_cat, o_cmask = build_obligations(report, ref)
+    n_o = len(o_num)
+    sample['obligation_numeric'] = torch.tensor(o_num, dtype=torch.float32) if o_num else torch.zeros(0, 2)
+    sample['obligation_cat_ids'] = torch.zeros(n_o, 7, dtype=torch.long)
+    sample['obligation_cat_mask'] = torch.tensor(o_cmask, dtype=torch.long) if o_cmask else torch.zeros(0, 7, dtype=torch.long)
+    sample['obligation_mask'] = torch.ones(n_o, dtype=torch.long)
+    sample['_obligation_cat_values'] = o_cat
 
     sample['report_id'] = report.get('reportsn', '')
 
@@ -452,6 +669,26 @@ def encode_sample(sample: dict, vocab: dict):
     else:
         sample['public_cat_ids'] = torch.zeros(0, 1, dtype=torch.long)
     del sample['_public_cat_values']
+
+    # obligations: 7 列 cat = [type, ag_f1, ag_f2, pp_f1, pp_f2, rr_f1, rr_f2]
+    # 第 0 列 type 走 OBLIGATION_TYPE_VOCAB
+    # 后 6 列按 (type, field, table) 三元组成对：所有 OBLIGATIONS_CAT_FIELDS 排序即列顺序
+    if sample['_obligation_cat_values']:
+        rows = []
+        for row in sample['_obligation_cat_values']:
+            obl_type = row[0]
+            type_id = OBLIGATION_TYPE_VOCAB.get(obl_type, 0)
+            # row[1:7] 是 6 列 field positions；按 OBLIGATIONS_CAT_FIELDS 顺序解码
+            field_ids = []
+            for idx, (_obl_t, _f, table) in enumerate(OBLIGATIONS_CAT_FIELDS):
+                val = row[1 + idx] if 1 + idx < len(row) else None
+                fid = encode_value('obligation', table, val, vocab) if table else 0
+                field_ids.append(fid)
+            rows.append([type_id] + field_ids)
+        sample['obligation_cat_ids'] = torch.tensor(rows, dtype=torch.long)
+    else:
+        sample['obligation_cat_ids'] = torch.zeros(0, 7, dtype=torch.long)
+    del sample['_obligation_cat_values']
 
 
 # ============================================================

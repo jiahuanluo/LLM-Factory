@@ -18,6 +18,7 @@ from .fields import (
     USER_CAT_FIELDS, ACCOUNT_CAT_FIELDS, QUERY_CAT_FIELDS,
     SUMMARY_TABLES, PAYSTATE_VOCAB, PAYSTATE_VOCAB_SIZE,
     PUBLIC_TYPE_VOCAB, PUBLIC_TYPE_VOCAB_SIZE,
+    OBLIGATIONS_CAT_FIELDS, OBLIGATION_TYPE_VOCAB, OBLIGATION_TYPE_VOCAB_SIZE,
 )
 
 
@@ -52,7 +53,7 @@ def build_vocab_from_codetable(xlsx_path: str | Path) -> dict:
 
 def collect_used_tables() -> dict[str, list[str]]:
     """收集代码中真正用到的码值表名，按分支分组。"""
-    used = {'user': [], 'summary': [], 'account': [], 'query': []}
+    used = {'user': [], 'summary': [], 'account': [], 'query': [], 'obligation': []}
     for path, table in USER_CAT_FIELDS:
         if table:
             used['user'].append(table)
@@ -66,11 +67,14 @@ def collect_used_tables() -> dict[str, list[str]]:
     for _path, table in QUERY_CAT_FIELDS:
         if table:
             used['query'].append(table)
+    for _obl_t, _f, table in OBLIGATIONS_CAT_FIELDS:
+        if table:
+            used['obligation'].append(table)
     return used
 
 
 def build_cat_vocab(xlsx_path: str | Path | None = None) -> dict:
-    """构建完整 cat_vocab（含特殊 vocab 如 paystate、public_type）。"""
+    """构建完整 cat_vocab（含特殊 vocab 如 paystate、public_type、obligation_type）。"""
     if xlsx_path is None:
         # 默认路径
         p = Path('data/home-credit/个人征信/个人征信码值表.xlsx')
@@ -94,6 +98,7 @@ def build_cat_vocab(xlsx_path: str | Path | None = None) -> dict:
     # 特殊 vocab
     vocab['paystate'] = {'<all>': PAYSTATE_VOCAB}
     vocab['public_type'] = {'<all>': PUBLIC_TYPE_VOCAB}
+    vocab['obligation_type'] = {'<all>': OBLIGATION_TYPE_VOCAB}
 
     return vocab
 
@@ -111,7 +116,7 @@ def load_vocab(path: str | Path) -> dict:
 
 def get_vocab_size(branch: str, table: str, vocab: dict) -> int:
     """返回某分支某表 vocab 大小（含 UNK）。"""
-    if branch in ('paystate', 'public_type'):
+    if branch in ('paystate', 'public_type', 'obligation_type'):
         return len(vocab[branch]['<all>'])
     return len(vocab.get(branch, {}).get(table, {'<UNK>': 0}))
 
@@ -120,7 +125,7 @@ def encode_value(branch: str, table: str, value, vocab: dict) -> int:
     """把码值编码成 id；空值/未知都返回 0 (<UNK>)。"""
     if value is None or value == '':
         return 0
-    if branch in ('paystate', 'public_type'):
+    if branch in ('paystate', 'public_type', 'obligation_type'):
         return vocab[branch]['<all>'].get(value, 0)
     table_vocab = vocab.get(branch, {}).get(table, {})
     return table_vocab.get(str(value).strip(), 0)
