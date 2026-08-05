@@ -2,9 +2,10 @@
 # 多卡启动：torchrun --nproc_per_node=N run_pbc_pretrain.py configs/pbc_pretrain.yaml
 
 # === PbcModelArguments ===
-d: 128
-n_heads: 4
-n_layers: 2
+d: 256
+n_heads: 8
+n_layers: 4
+top_hidden: 512
 dropout: 0.1
 mask_ratio: 0.15
 ema_decay: 0.99

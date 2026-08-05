@@ -34,11 +34,14 @@ from .fields import (
 
 @dataclass
 class PbcCreditModelConfig:
-    d: int = 128
-    n_heads: int = 4
-    n_layers: int = 2
+    d: int = 256
+    n_heads: int = 8
+    n_layers: int = 4
     dropout: float = 0.1
-    top_hidden: int = 256
+    top_hidden: int = 512
+    # 顶层 trunk（替代 concat MLP，让 14 个 pooled 互相关注）
+    top_n_layers: int = 2
+    top_n_heads: int = 8
 
     # user（13 base + score 5 = 18）
     user_numeric_dim: int = 18
@@ -226,6 +229,50 @@ class InteractiveModule(nn.Module):
         return pooled
 
 
+class TopTrunk(nn.Module):
+    """14 个模态 pooled + [CLS] → transformer → CLS → head。
+
+    替代旧版 concat MLP（14*d → top_hidden → 1）。
+    优点：模态间双向 attention；参数效率更高；r1/r3/r4/c1 也参与交互。
+    """
+
+    def __init__(self, d: int, n_modality: int = 14,
+                 n_heads: int = 4, n_layers: int = 2,
+                 dropout: float = 0.1, top_hidden: int = 256):
+        super().__init__()
+        self.n_modality = n_modality
+        # learnable CLS token（独立于 modality poolings）
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, d))
+        nn.init.normal_(self.cls_token, std=0.02)
+        # 位置 / 模态类型 embedding：[CLS, user, summary, d1, r1, ..., int_ap]
+        self.pos_emb = nn.Parameter(torch.zeros(n_modality + 1, d))
+        nn.init.normal_(self.pos_emb, std=0.02)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d, nhead=n_heads, dim_feedforward=d * 4,
+            dropout=dropout, activation='relu', batch_first=True,
+            norm_first=True,
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
+        self.head = nn.Sequential(
+            nn.Linear(d, top_hidden),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(top_hidden, 1),
+        )
+        self.d = d
+
+    def forward(self, pooled_list: list[torch.Tensor]) -> torch.Tensor:
+        """pooled_list: 长度 n_modality 的 [B, d] tensor 列表。Returns [B, 1]."""
+        B = pooled_list[0].shape[0]
+        x = torch.stack(pooled_list, dim=1)  # [B, n_modality, d]
+        cls = self.cls_token.expand(B, -1, -1)  # [B, 1, d]
+        x = torch.cat([cls, x], dim=1)  # [B, n_modality+1, d]
+        x = x + self.pos_emb.unsqueeze(0)
+        h = self.transformer(x)
+        cls_out = h[:, 0]  # [B, d]
+        return self.head(cls_out)
+
+
 # ============================================================
 # Main model
 # ============================================================
@@ -300,11 +347,10 @@ class PbcCreditModel(nn.Module):
         # 14 pooled vectors: user, summary, d1, r1, r2, r3, r4, c1, query, public, obligation,
         #                    int_aa, int_aq, int_ap
         n_pooled = 14
-        self.top = nn.Sequential(
-            nn.Linear(d * n_pooled, config.top_hidden),
-            nn.ReLU(),
-            nn.Dropout(config.dropout),
-            nn.Linear(config.top_hidden, 1),
+        self.top = TopTrunk(
+            d=d, n_modality=n_pooled,
+            n_heads=config.top_n_heads, n_layers=config.top_n_layers,
+            dropout=config.dropout, top_hidden=config.top_hidden,
         )
 
         # === pretrain mask heads ===
@@ -396,15 +442,14 @@ class PbcCreditModel(nn.Module):
         int_ap = self.int_ap(acc_tokens, acc_mask,
                               public_tokens, batch['public_mask'])
 
-        # === concat + top ===
+        # === top trunk: 14 个 pooled 作为 token 序列 + [CLS] ===
         pooled_list = [
             user_h, summary_h,
             d1_p, r1_p, r2_p, r3_p, r4_p, c1_p,
             query_h, public_h, obligation_h,
             int_aa, int_aq, int_ap,
         ]
-        concat = torch.cat(pooled_list, dim=-1)
-        logit = self.top(concat)
+        logit = self.top(pooled_list)
         return logit
 
     def _forward_pretrain(self, batch, accs, query_tokens, public_tokens, summary_h, obligation_tokens):

@@ -31,9 +31,12 @@ from run_pbc_pretrain import build_model_cfg
 
 @dataclass
 class PbcFinetuneModelArguments:
-    d: int = field(default=128)
-    n_heads: int = field(default=4)
-    n_layers: int = field(default=2)
+    d: int = field(default=256)
+    n_heads: int = field(default=8)
+    n_layers: int = field(default=4)
+    top_hidden: int = field(default=512, metadata={"help": "顶层 trunk head 隐藏维"})
+    top_n_layers: int = field(default=2, metadata={"help": "顶层 trunk transformer 层数"})
+    top_n_heads: int = field(default=8, metadata={"help": "顶层 trunk attention 头数"})
     dropout: float = field(default=0.1)
     init_from_pretrain: str | None = field(default=None,
         metadata={"help": "Path to encoder_state.pt from pretrain"})

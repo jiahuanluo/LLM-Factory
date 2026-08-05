@@ -39,9 +39,12 @@ from pbc_credit.model import PbcCreditModel, PbcCreditModelConfig
 
 @dataclass
 class PbcModelArguments:
-    d: int = field(default=128)
-    n_heads: int = field(default=4)
-    n_layers: int = field(default=2)
+    d: int = field(default=256)
+    n_heads: int = field(default=8)
+    n_layers: int = field(default=4)
+    top_hidden: int = field(default=512, metadata={"help": "顶层 trunk head 隐藏维"})
+    top_n_layers: int = field(default=2, metadata={"help": "顶层 trunk transformer 层数"})
+    top_n_heads: int = field(default=8, metadata={"help": "顶层 trunk attention 头数"})
     dropout: float = field(default=0.1)
     mask_ratio: float = field(default=0.15)
     ema_decay: float = field(default=0.99, metadata={"help": "EMA decay for branch loss normalizer"})
@@ -102,6 +105,9 @@ def build_model_cfg(model_args: PbcModelArguments, vocab: dict) -> PbcCreditMode
         d=model_args.d,
         n_heads=model_args.n_heads,
         n_layers=model_args.n_layers,
+        top_hidden=model_args.top_hidden,
+        top_n_layers=model_args.top_n_layers,
+        top_n_heads=model_args.top_n_heads,
         dropout=model_args.dropout,
         user_numeric_dim=18,                          # 13 base (含 3 稳定性) + score 5
         user_cat_tables=user_tables,
