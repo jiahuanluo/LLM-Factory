@@ -13,8 +13,10 @@ PbcDataset 可读的 JSONL，输出与 scripts/sql/mvp_user_d1.sql + postprocess
 与 SQL 端的语义对齐（字段表导入 src/pbc_credit/fields.py，单一事实源）：
   - user 18 numeric 按 v_user 定义（certNo 出生年算年龄、手机/居住/职业计数、
     score 5 字段等）
-  - account 10 numeric 按 v_all_accounts 定义；paystate 用 latest5yearDetails
-    按月排序取最近 60 月、PAYSTATE_VOCAB 编码、左 pad 0
+  - account 13 numeric 按 v_all_accounts 定义（P1 起：+pd01cj02 已用额度、
+    +pd01cj06 当前逾期、+credit_utilization=cj02/aj02 clamp[0,1.5]）；
+    paystate 用 latest5yearDetails 按月排序取最近 60 月、PAYSTATE_VOCAB 编码、左 pad 0
+  - account 13 cat（P1 起：+pd01cd01 活跃账户状态，码值表=个人借贷账户状态代码表(R2/R3账户)）
   - cat encode：先 --build-vocab 从语料构建 cat_vocab_mock.json
     （0=<UNK>，1..N 按 code_value 字典序，与 SQL 04_build_cat_vocab 约定一致），
     之后 --encode 用同一 vocab 保证确定性
@@ -45,8 +47,8 @@ from hashlib import md5
 from pathlib import Path
 
 # account numeric 列（与 fields.ACCOUNT_NUMERIC_FIELDS 对齐）中做 log1p 的下标
-LOG1P_COLS = {0, 1, 2, 4, 5, 9}   # aj01, aj02, aj03, bj01, bj02, special_trades_amount
-AGE_COL, MAT_COL = 6, 7           # account_age_years, years_to_maturity
+LOG1P_COLS = {0, 1, 2, 4, 5, 6, 7, 12}   # aj01, aj02, aj03, bj01, bj02, cj02, cj06, st_amt
+# credit_utilization(idx 8) clamp [0,1.5] 不做 log1p；年份/计数列原值（年份 clamp 见 build_account）
 
 _ACCOUNT_TYPES = ['D1', 'R1', 'R2', 'R3', 'R4', 'C1']
 
@@ -157,6 +159,7 @@ def build_user_cat(r: dict, user_fields, vocab) -> tuple[list[int], list[int]]:
 def build_account(acc: dict, rt: date, acc_fields, vocab, paystate_vocab) -> dict | None:
     basic = acc.get('accountBasic') or {}
     latest = acc.get('latestInfo') or {}
+    mps = acc.get('latestMonthPayState') or {}
     trades = acc.get('specialTrades') or []
     atype = _s(basic.get('pd01ad01'))
     if atype not in _ACCOUNT_TYPES:
@@ -167,6 +170,11 @@ def build_account(acc: dict, rt: date, acc_fields, vocab, paystate_vocab) -> dic
     mat = max(-50.0, min(50.0, _years_between(mat_d, rt))) if mat_d else 0.0
     st_amount = sum(_pfloat(t.get('pd01fj01')) for t in trades)
 
+    cj02 = _pfloat(mps.get('pd01cj02'))       # 已用额度（活跃账户才有）
+    cj06 = _pfloat(mps.get('pd01cj06'))       # 当前逾期总额
+    limit = _pfloat(basic.get('pd01aj02'))
+    util = max(0.0, min(1.5, cj02 / limit)) if limit > 0 and cj02 > 0 else 0.0
+
     numeric = [
         _pfloat(basic.get('pd01aj01')),
         _pfloat(basic.get('pd01aj02')),
@@ -174,12 +182,13 @@ def build_account(acc: dict, rt: date, acc_fields, vocab, paystate_vocab) -> dic
         _pfloat(basic.get('pd01as01')),
         _pfloat(latest.get('pd01bj01')),
         _pfloat(latest.get('pd01bj02')),
+        cj02, cj06, util,
         age, mat, float(len(trades)), st_amount,
     ]
     numeric = [math.log1p(max(0.0, x)) if i in LOG1P_COLS else x
                for i, x in enumerate(numeric)]
 
-    cat_src = {**basic, **latest}
+    cat_src = {**basic, **latest, **mps}
     ids, masks = [], []
     for f, table in acc_fields:
         v = _s(cat_src.get(f))
@@ -234,7 +243,8 @@ def collect_vocab_values(reports: list, user_fields, acc_fields) -> dict:
             if v:
                 vals['user'][table].add(v)
         for acc in r.get('accountInfos') or []:
-            cat_src = {**(acc.get('accountBasic') or {}), **(acc.get('latestInfo') or {})}
+            cat_src = {**(acc.get('accountBasic') or {}), **(acc.get('latestInfo') or {}),
+                       **(acc.get('latestMonthPayState') or {})}
             for f, table in acc_fields:
                 v = _s(cat_src.get(f))
                 if v:
