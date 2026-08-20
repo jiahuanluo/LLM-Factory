@@ -1,6 +1,6 @@
 # Mock 征信报告校准 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 把 `data/pbc/cris_json_split/`（598 份近退化 mock）校准为字段取值范围与 11,730 份真实生产报告一致的合成数据，输出 `data/pbc/cris_json_split_calibrated/`（596 份，跳过 2 个离群文件）。
 
@@ -130,7 +130,7 @@ def inv_cdf(rng, knots, tail_prob=0.01):
 **Files:**
 - Create: `scripts/verify_mock_calibration.py`
 
-- [ ] **Step 1: 实现不变量检查**。CLI：`python scripts/verify_mock_calibration.py <目录> [--json out.json]`。对目录内每份合法报告逐账户检查 spec §4 的 16 项：
+- [x] **Step 1: 实现不变量检查**。CLI：`python scripts/verify_mock_calibration.py <目录> [--json out.json]`。对目录内每份合法报告逐账户检查 spec §4 的 16 项：
   1. `latestInfo.pd01bd01` 与 `latestMonthPayState.pd01cd01` 互斥（同账户两者不同时有值）
   2. 关闭账户无 `latestMonthPayState` 节点
   3. 活跃账户有 `latestMonthPayState` 且 `pd01bd01 == ''`
@@ -147,52 +147,52 @@ def inv_cdf(rng, knots, tail_prob=0.01):
   14. `pd01bd03` 非空 → `pd01bd01 == '4'` 或 `pd01cd01 == '5'`
   15. R2/R3 关闭态 `pd01bd01 != '3'`
   16. `summaryInfo.loanCardAccount.pc02hs02 == 报告 R2 账户数` 且 `nonrevolvingLoan.pc02es02 == D1 账户数`
-- [ ] **Step 2: 实现分布统计与验收门**（spec §5 表）：每报告账户数 p50∈[30,80]、查询数 p50∈[15,25]、D1 借款 max≥3e7、R2 额度 p50∈[15000,30000]、逾期 max≥1.7e7、pd01bd01 枚举 ⊇ {1..8}（不含 31）、pd01cd01 覆盖 ≥6 种、latest24state 去重 >100、reportTime 覆盖 2020 与 2026 年份、评分∈[600,950]、年龄∈[25,65]、男女都有、R2 利用率 ≤1.1、零账户比例 ∈[0,0.01]、不变量违反率 <0.1%。输出人类可读报告 + 逐门 PASS/FAIL，任一 FAIL → exit 1。
-- [ ] **Step 3: 对原 mock 跑红**。`python scripts/verify_mock_calibration.py /home/daxigua/workspace/LLM-Factory/data/pbc/cris_json_split; echo "exit=$?"`。预期：账户数 p50=8、类型分布失衡、D1 max=520000 等大量 FAIL，exit=1。
-- [ ] **Step 4: Commit** `feat(pbc): mock 校准验证器（16 不变量 + 分布验收门）`
+- [x] **Step 2: 实现分布统计与验收门**（spec §5 表）：每报告账户数 p50∈[30,80]、查询数 p50∈[15,25]、D1 借款 max≥3e7、R2 额度 p50∈[15000,30000]、逾期 max≥1.7e7、pd01bd01 枚举 ⊇ {1..8}（不含 31）、pd01cd01 覆盖 ≥6 种、latest24state 去重 >100、reportTime 覆盖 2020 与 2026 年份、评分∈[600,950]、年龄∈[25,65]、男女都有、R2 利用率 ≤1.1、零账户比例 ∈[0,0.01]、不变量违反率 <0.1%。输出人类可读报告 + 逐门 PASS/FAIL，任一 FAIL → exit 1。
+- [x] **Step 3: 对原 mock 跑红**。`python scripts/verify_mock_calibration.py /home/daxigua/workspace/LLM-Factory/data/pbc/cris_json_split; echo "exit=$?"`。预期：账户数 p50=8、类型分布失衡、D1 max=520000 等大量 FAIL，exit=1。
+- [x] **Step 4: Commit** `feat(pbc): mock 校准验证器（16 不变量 + 分布验收门）`
 
 ### Task 2: 校准器 — 信封 / personInfo / score（spec §3.1-3.3）
 
 **Files:**
 - Create: `scripts/calibrate_mock_reports.py`
 
-- [ ] **Step 1: 骨架**：`main(src_dir, dst_dir)` 遍历 `*.json`；`rng = random.Random(filename_stem)`；非 dict / 缺 `accountInfos`/`personInfo` → 记日志跳过（json_4、json_352 自然命中）。常量表 + `inv_cdf` + 月份/身份证工具函数。
-- [ ] **Step 2: 信封**：reportTime 月份按 sqrt 权重采样、日 U(1,28)、时:分:秒随机；`tranDate`/`createTime` = 同日 `YYYYMMDD`（修复原 mock 二者不一致）；`reportsn = f'mock_{YYYYMMDD}{HHMMSS}{6位随机}'`；`name = '测' + 姓 + 名`（内置姓/名字池）。
-- [ ] **Step 3: personInfo**：identity 五枚举按频率重采、DOB=报告日−U(25,65) 岁、certNo 18 位合成并同步 `header.request.pa01bi01`/`pa01bq01`；mobiles 1-5 条（`13x+8位`）；residences/professionals 1-5 条（枚举重采 + 日期 ≤ 报告日）；marriage 按频率，'10' 未婚清空配偶字段否则填随机配偶。
-- [ ] **Step 4: score 补齐**：`pc010q01=U(600,950)`、`pc010q02=U(1,99)`、`pc010s01='2'`、`pc010d01`=SCORE_FACTORS 随机 2 个去重逗号拼接。
-- [ ] **Step 5: Commit** `feat(pbc): 校准器信封/personInfo/score`
+- [x] **Step 1: 骨架**：`main(src_dir, dst_dir)` 遍历 `*.json`；`rng = random.Random(filename_stem)`；非 dict / 缺 `accountInfos`/`personInfo` → 记日志跳过（json_4、json_352 自然命中）。常量表 + `inv_cdf` + 月份/身份证工具函数。
+- [x] **Step 2: 信封**：reportTime 月份按 sqrt 权重采样、日 U(1,28)、时:分:秒随机；`tranDate`/`createTime` = 同日 `YYYYMMDD`（修复原 mock 二者不一致）；`reportsn = f'mock_{YYYYMMDD}{HHMMSS}{6位随机}'`；`name = '测' + 姓 + 名`（内置姓/名字池）。
+- [x] **Step 3: personInfo**：identity 五枚举按频率重采、DOB=报告日−U(25,65) 岁、certNo 18 位合成并同步 `header.request.pa01bi01`/`pa01bq01`；mobiles 1-5 条（`13x+8位`）；residences/professionals 1-5 条（枚举重采 + 日期 ≤ 报告日）；marriage 按频率，'10' 未婚清空配偶字段否则填随机配偶。
+- [x] **Step 4: score 补齐**：`pc010q01=U(600,950)`、`pc010q02=U(1,99)`、`pc010s01='2'`、`pc010d01`=SCORE_FACTORS 随机 2 个去重逗号拼接。
+- [x] **Step 5: Commit** `feat(pbc): 校准器信封/personInfo/score`
 
 ### Task 3: 校准器 — accountInfos 合成（spec §3.4 + §4）
 
 **Files:**
 - Modify: `scripts/calibrate_mock_reports.py`
 
-- [ ] **Step 1: 账户数重采样**：ACCOUNT_COUNT_KNOTS 逆 CDF，封顶 200（命中记日志）；骨架池 = 原文件账户按"有无 latestMonthPayState"分两组 deepcopy 备用。
-- [ ] **Step 2: 逐账户 accountBasic**：类型/子类/业务种类/币种按频率；`pd01ai01`=5 位数字、`pd01ai02`=2 字母；账龄按 AGE_MEDIAN_MONTHS 采样 → `pd01ar01 = 报告日 − 账龄`；金额按类型走 AMOUNT_KNOTS（贷款填 aj01 清 aj02，信用卡填 aj02 清 aj01）。
-- [ ] **Step 3: 生命周期**：活跃 23% → `pd01bd01=''`、保留/植入 latestMonthPayState（pd01cd01 按 ACTIVE_CD01_FREQ）；关闭 → 删 latestMonthPayState、pd01bd01 按 CLOSED_BD01_FREQ（R2/R3 采到 '3' 改 '4'）、`pd01br01 = 报告日 − U(0, 账龄)`、`pd01ar02 = pd01br01`（关闭贷款）、`pd01as01 ≥ 存续月数`；活跃贷款 `pd01ar02 = 报告日 + 剩余期`、`pd01as01 = 账龄 + U(6,120)`；`pd01br03 = 报告日 − U(1,60) 天`。
-- [ ] **Step 4: 余额/已用/逾期**：信用卡已用 = BALANCE_KNOTS 采样 clamp 到 ≤额度×1.1，活跃卡 `pd01bj01 = pd01cj02 = 已用`，`pd01cj01 = 已用`；贷款余额 = BALANCE_KNOTS（活跃/呆账/逾期），结清/正常关闭 = '0'；呆账/逾期账户 `pd01bj02` 与活跃 `pd01cj06` = OVERDUE_KNOTS 采样，正常 = '0'/''；五级分类 pd01bd03 仅呆账有（FIVE_LEVEL_FREQ）。
-- [ ] **Step 5: 还款历史**：按"关键算法"生成 latest24state 与 latest5yearDetails（含 pd01ej01 联动）；specialTrades 5% 保留（金额 ±50% 抖动）；specialEvents/largeSpecialInstalments 随骨架带入（金额抖动）。
-- [ ] **Step 6: 单元自检**：对生成账户直接调用 Task 1 的不变量函数（`from verify_mock_calibration import check_report_invariants`），试跑 3 份文件断言 0 违反，迭代修复。
-- [ ] **Step 7: Commit** `feat(pbc): 校准器账户合成核心`
+- [x] **Step 1: 账户数重采样**：ACCOUNT_COUNT_KNOTS 逆 CDF，封顶 200（命中记日志）；骨架池 = 原文件账户按"有无 latestMonthPayState"分两组 deepcopy 备用。
+- [x] **Step 2: 逐账户 accountBasic**：类型/子类/业务种类/币种按频率；`pd01ai01`=5 位数字、`pd01ai02`=2 字母；账龄按 AGE_MEDIAN_MONTHS 采样 → `pd01ar01 = 报告日 − 账龄`；金额按类型走 AMOUNT_KNOTS（贷款填 aj01 清 aj02，信用卡填 aj02 清 aj01）。
+- [x] **Step 3: 生命周期**：活跃 23% → `pd01bd01=''`、保留/植入 latestMonthPayState（pd01cd01 按 ACTIVE_CD01_FREQ）；关闭 → 删 latestMonthPayState、pd01bd01 按 CLOSED_BD01_FREQ（R2/R3 采到 '3' 改 '4'）、`pd01br01 = 报告日 − U(0, 账龄)`、`pd01ar02 = pd01br01`（关闭贷款）、`pd01as01 ≥ 存续月数`；活跃贷款 `pd01ar02 = 报告日 + 剩余期`、`pd01as01 = 账龄 + U(6,120)`；`pd01br03 = 报告日 − U(1,60) 天`。
+- [x] **Step 4: 余额/已用/逾期**：信用卡已用 = BALANCE_KNOTS 采样 clamp 到 ≤额度×1.1，活跃卡 `pd01bj01 = pd01cj02 = 已用`，`pd01cj01 = 已用`；贷款余额 = BALANCE_KNOTS（活跃/呆账/逾期），结清/正常关闭 = '0'；呆账/逾期账户 `pd01bj02` 与活跃 `pd01cj06` = OVERDUE_KNOTS 采样，正常 = '0'/''；五级分类 pd01bd03 仅呆账有（FIVE_LEVEL_FREQ）。
+- [x] **Step 5: 还款历史**：按"关键算法"生成 latest24state 与 latest5yearDetails（含 pd01ej01 联动）；specialTrades 5% 保留（金额 ±50% 抖动）；specialEvents/largeSpecialInstalments 随骨架带入（金额抖动）。
+- [x] **Step 6: 单元自检**：对生成账户直接调用 Task 1 的不变量函数（`from verify_mock_calibration import check_report_invariants`），试跑 3 份文件断言 0 违反，迭代修复。
+- [x] **Step 7: Commit** `feat(pbc): 校准器账户合成核心`
 
 ### Task 4: 校准器 — 查询 / 公共信息 / summaryInfo 重算（spec §3.5-3.9）
 
 **Files:**
 - Modify: `scripts/calibrate_mock_reports.py`
 
-- [ ] **Step 1: queryRecords**：QUERY_COUNT_KNOTS 重采样封顶 300；`ph010r01 = 报告日 − U(1,730) 天`；原因/机构类型按频率；`ph010q02` 2 字母。
-- [ ] **Step 2: publicInfo**：每子段按 PUBLIC_FILL_RATE 伯努利保留（保留则金额 ±50% 抖动、日期 ≤ 报告日），否则 `[]`；otherMarks 置 `[]`。
-- [ ] **Step 3: agreementInfos/postpays/relatedRepayDutyInfos**：数量按中位（9/0/4）lognormal-ish 重采，复制模板条目金额 ±50% 抖动、日期 ≤ 报告日。
-- [ ] **Step 4: summaryInfo 重算**：按"关键算法"重算五段 + overdues + querySummary + badDebit + tradeTips，其余置空。
-- [ ] **Step 5: 元字段刷新 + 落盘**：递归刷 tranDate/createTime/reportsn、重编 seq；`json.dump(..., ensure_ascii=False, indent=1)`。
-- [ ] **Step 6: Commit** `feat(pbc): 校准器查询/公共信息/汇总重算`
+- [x] **Step 1: queryRecords**：QUERY_COUNT_KNOTS 重采样封顶 300；`ph010r01 = 报告日 − U(1,730) 天`；原因/机构类型按频率；`ph010q02` 2 字母。
+- [x] **Step 2: publicInfo**：每子段按 PUBLIC_FILL_RATE 伯努利保留（保留则金额 ±50% 抖动、日期 ≤ 报告日），否则 `[]`；otherMarks 置 `[]`。
+- [x] **Step 3: agreementInfos/postpays/relatedRepayDutyInfos**：数量按中位（9/0/4）lognormal-ish 重采，复制模板条目金额 ±50% 抖动、日期 ≤ 报告日。
+- [x] **Step 4: summaryInfo 重算**：按"关键算法"重算五段 + overdues + querySummary + badDebit + tradeTips，其余置空。
+- [x] **Step 5: 元字段刷新 + 落盘**：递归刷 tranDate/createTime/reportsn、重编 seq；`json.dump(..., ensure_ascii=False, indent=1)`。
+- [x] **Step 6: Commit** `feat(pbc): 校准器查询/公共信息/汇总重算`
 
 ### Task 5: 小样本 → 全量 → 三方对比 → 交付
 
-- [ ] **Step 1: 5 份试跑**：`python scripts/calibrate_mock_reports.py --src <用户checkout>/cris_json_split --dst <用户checkout>/cris_json_split_calibrated --limit 5`，跑 verify 全绿；失败则回 Task 2-4 迭代。
-- [ ] **Step 2: 全量**：去掉 `--limit` 跑 598 份（预期 596 输出 + 2 跳过日志），后台运行。
-- [ ] **Step 3: 验收**：verify 全绿（exit 0）；统计三方对比（真实 | 原 mock | 校准后）逐项对照 `mock_calib_verify.txt` 的数字量级：账户 p50≈46/p95≈154/max 200、D1 借款 p50≈4.3万/p95≈127万/max=39000000、逾期 max≈17902000、latest24state 数百种、状态枚举 1-8 全覆盖。把对比报告写到 `<用户checkout>/data/pbc/mock_calib_verify_new.txt`。
-- [ ] **Step 4: 收尾**：data/pbc/CLAUDE.md 属于用户分支（本 worktree 基于 main 无此文件，不新建以免冲突）；最终 Commit + push worktree 分支；向用户报告输出路径与分支名。
+- [x] **Step 1: 5 份试跑**：`python scripts/calibrate_mock_reports.py --src <用户checkout>/cris_json_split --dst <用户checkout>/cris_json_split_calibrated --limit 5`，跑 verify 全绿；失败则回 Task 2-4 迭代。
+- [x] **Step 2: 全量**：去掉 `--limit` 跑 598 份（预期 596 输出 + 2 跳过日志），后台运行。
+- [x] **Step 3: 验收**：verify 全绿（exit 0）；统计三方对比（真实 | 原 mock | 校准后）逐项对照 `mock_calib_verify.txt` 的数字量级：账户 p50≈46/p95≈154/max 200、D1 借款 p50≈4.3万/p95≈127万/max=39000000、逾期 max≈17902000、latest24state 数百种、状态枚举 1-8 全覆盖。把对比报告写到 `<用户checkout>/data/pbc/mock_calib_verify_new.txt`。
+- [x] **Step 4: 收尾**：data/pbc/CLAUDE.md 属于用户分支（本 worktree 基于 main 无此文件，不新建以免冲突）；最终 Commit + push worktree 分支；向用户报告输出路径与分支名。
 
 **验收命令汇总：**
 ```bash
