@@ -6,14 +6,17 @@ PbcDataset 可读的 JSONL，输出与 scripts/sql/mvp_user_d1.sql + postprocess
 
   {"reportsn": "...", "pbc_struct": "<stringified>"}
   pbc_struct 内层：
-    user_numeric[18], user_cat_ids[12], user_cat_mask[12]
-    {d1,r1,r2,r3,r4,c1}_numeric[[N,10]] / _cat_ids[[N,12]] / _cat_mask[[N,12]]
+    user_numeric[32], user_cat_ids[14], user_cat_mask[14]
+    {d1,r1,r2,r3,r4,c1}_numeric[[N,13]] / _cat_ids[[N,13]] / _cat_mask[[N,13]]
     / _paystate[[N,60]] / _mask[N]
 
 与 SQL 端的语义对齐（字段表导入 src/pbc_credit/fields.py，单一事实源）：
   - user 32 numeric = 13 基础（v_user 定义，**不含 score 块**——生产覆盖率 4.7% 有域偏移）
     + 19 report 级聚合（账户计数/呆账逾期/金额和/D1、R2 专项/使用率/逾期月数/查询密度；
     公式见 fields.py USER_NUMERIC_FIELDS 注释，生产侧将来按同名公式在 v_user 补列）
+  - user 14 cat = 12 报文字段 + cert_prov/cert_city：生产报文内出生日期/地址是哈希值，
+    户籍省（cert_no_mask 1-2 位）/市（1-4 位）与出生日期（7-14 位）从证件号提取
+    （A 格式 18 位、前 14 位明文，口径同 mvp_user_d1.sql；mock 报文内 certNo 即明文）
   - account 13 numeric 按 v_all_accounts 定义（P1 起：+pd01cj02 已用额度、
     +pd01cj06 当前逾期、+credit_utilization=cj02/aj02 clamp[0,1.5]）；
     paystate 用 latest5yearDetails 按月排序取最近 60 月、PAYSTATE_VOCAB 编码、左 pad 0
@@ -100,13 +103,36 @@ def _years_between(d1: date, d2: date) -> float:
     return round((d1 - d2).days / 365.25, 4)
 
 
+def _cert_parts(cert):
+    """cert_no_mask（A 格式 18 位，前 14 位明文）→ (省 2 位, 市 4 位, 出生 date)。
+
+    生产报文内出生日期/地址是哈希值，户籍地区与出生日期从证件号提取
+    （口径同 mvp_user_d1.sql）：1-6 位行政区划码（1-2 省 / 1-4 市）+ 7-14 位出生日期。
+    非法格式返回 ('', '', None)，由上层走报文字段兜底。
+    """
+    cert = _s(cert)
+    if len(cert) < 14 or not cert[:6].isdigit():
+        return '', '', None
+    prov, city = cert[:2], cert[:4]
+    dob = None
+    ymd = cert[6:14]
+    if ymd.isdigit():
+        y, m, d = int(ymd[:4]), int(ymd[4:6]), int(ymd[6:8])
+        if 1900 <= y <= 2200 and 1 <= m <= 12 and 1 <= d <= 31:
+            try:
+                dob = date(y, m, d)
+            except ValueError:
+                dob = None
+    return prov, city, dob
+
+
 def _s(v):
     return str(v).strip() if v is not None else ''
 
 
 # ---------- 报告 → 扁平 sample ----------
 
-def build_user_numeric(r: dict, rt: date) -> list[float]:
+def build_user_numeric(r: dict, rt: date, dob) -> list[float]:
     person = r.get('personInfo') or {}
     ident = person.get('identity') or {}
     marriage = person.get('marriage') or {}
@@ -117,13 +143,10 @@ def build_user_numeric(r: dict, rt: date) -> list[float]:
     resi0 = resis[0] if resis else {}
     header = (r.get('header') or {})
 
-    cert = _s(r.get('certNo'))
-    birth_year = None
-    if len(cert) >= 10 and cert[6:10].isdigit():
-        birth_year = int(cert[6:10])          # SQL: SUBSTR(cert_no_mask, 7, 4)
-    else:
-        dob = _pdate(ident.get('pb01ar01'))
-        birth_year = dob.year if dob else None
+    birth_year = dob.year if dob else None    # cert_no_mask 第 7-14 位（报文内是哈希）
+    if birth_year is None:
+        d0 = _pdate(ident.get('pb01ar01'))    # 报文出生日期明文时兜底（mock）
+        birth_year = d0.year if d0 else None
 
     mob_dates = [_pdate(m.get('pb01br01')) for m in mobiles]
     mob_dates = [d for d in mob_dates if d]
@@ -148,13 +171,15 @@ def build_user_numeric(r: dict, rt: date) -> list[float]:
     ]
 
 
-def build_user_cat(r: dict, user_fields, vocab) -> tuple[list[int], list[int]]:
+def build_user_cat(r: dict, user_fields, vocab, prov: str, city: str) -> tuple[list[int], list[int]]:
     person = r.get('personInfo') or {}
     sources = {
         **{k: person.get('identity') or {} for k in ('pb01ad01', 'pb01ad02', 'pb01ad03', 'pb01ad04', 'pb01ad05')},
         **{k: person.get('marriage') or {} for k in ('pb020d01',)},
         **{k: (person.get('professionals') or [{}])[0] for k in ('pb040d02', 'pb040d03', 'pb040d04', 'pb040d05', 'pb040d06')},
         **{k: (person.get('residences') or [{}])[0] for k in ('pb030d01',)},
+        'cert_prov': {'cert_prov': prov},
+        'cert_city': {'cert_city': city},
     }
     ids, masks = [], []
     for f, table in user_fields:
@@ -272,10 +297,13 @@ def _report_aggregate_features(aggs: list, r: dict, rt: date) -> list:
 
 def transform_report(r: dict, user_fields, acc_fields, paystate_vocab, vocab) -> dict:
     rt = _pdate(_s(r.get('reportTime'))[:19]) or _pdate(_s(r.get('tranDate')))
+    # mock 报文内 certNo 即明文；生产报文证件号是哈希，走 spark_convert_pbc_struct.py
+    # 的 cert_no_mask 外部注入（transform 同口径）
+    prov, city, dob = _cert_parts(_s(r.get('certNo')))
     out = {
         'user_numeric': None, 'user_cat_ids': None, 'user_cat_mask': None,
     }
-    out['user_cat_ids'], out['user_cat_mask'] = build_user_cat(r, user_fields, vocab)
+    out['user_cat_ids'], out['user_cat_mask'] = build_user_cat(r, user_fields, vocab, prov, city)
     per_type = {t: [] for t in _ACCOUNT_TYPES}
     for acc in r.get('accountInfos') or []:
         built = build_account(acc, rt, acc_fields, vocab, paystate_vocab)
@@ -289,7 +317,7 @@ def transform_report(r: dict, user_fields, acc_fields, paystate_vocab, vocab) ->
         out[f'{tl}_paystate'] = [a['paystate'] for a in lst]
         out[f'{tl}_mask'] = [1] * len(lst)
     aggs = [a['agg'] for lst in per_type.values() for a in lst]
-    out['user_numeric'] = build_user_numeric(r, rt) + _report_aggregate_features(aggs, r, rt)
+    out['user_numeric'] = build_user_numeric(r, rt, dob) + _report_aggregate_features(aggs, r, rt)
     return out
 
 
@@ -312,11 +340,14 @@ def collect_vocab_values(reports: list, user_fields, acc_fields) -> dict:
     vals = {'user': defaultdict(set), 'account': defaultdict(set)}
     for r in reports:
         person = r.get('personInfo') or {}
+        prov, city, _dob = _cert_parts(_s(r.get('certNo')))
         sources = {
             **{k: person.get('identity') or {} for k in ('pb01ad01', 'pb01ad02', 'pb01ad03', 'pb01ad04', 'pb01ad05')},
             'pb020d01': person.get('marriage') or {},
             **{k: (person.get('professionals') or [{}])[0] for k in ('pb040d02', 'pb040d03', 'pb040d04', 'pb040d05', 'pb040d06')},
             'pb030d01': (person.get('residences') or [{}])[0],
+            'cert_prov': {'cert_prov': prov},
+            'cert_city': {'cert_city': city},
         }
         for f, table in user_fields:
             v = _s(sources[f].get(f))
@@ -454,6 +485,10 @@ def main() -> int:
             n_train += 1
         else:
             n_val += 1
+        u_unk = sum(1 for cid, m in zip(sample['user_cat_ids'], sample['user_cat_mask'])
+                    if m == 1 and cid == 0)
+        if u_unk:
+            print(f'WARN user cat UNK {u_unk} 项（vocab 缺表或缺值）: {name}')
         for t in _ACCOUNT_TYPES:
             tl = t.lower()
             acc_counts[t] += len(sample[f'{tl}_mask'])

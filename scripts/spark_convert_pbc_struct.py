@@ -4,10 +4,13 @@
 （不 import convert_mock_to_pbc_struct / src）。
 
 数据源：brm_wyd_ods_mask.ods_marm_raw_credit_data_bdcn_v2（content = 完整报文 JSON）
+  + cert_no_mask：join CERT_TABLE（同 reportsn 多版本取最新 tran_date）。
+    生产报文内的出生日期/地址是哈希值，户籍省/市与出生日期改从 cert_no_mask 提取
+    （A 格式 18 位、前 14 位明文：1-6 位行政区划码[1-2 省/1-4 市]、7-14 位出生日期）
 输出表：erm_mx_data_work.marm_pbcg2_pbcstruct_v1_ds
   busi_sno | reportsn | pbc_struct | is_val | ds
-  - pbc_struct：PbcDataset 最终格式（user 32 维 + 6 类账户 13 numeric/13 cat/60 paystate，
-    含 log1p 归一化 + 19 个 report 级聚合），离线**零处理**直接给模型
+  - pbc_struct：PbcDataset 最终格式（user 32 numeric + 14 cat + 6 类账户
+    13 numeric/13 cat/60 paystate，含 log1p 归一化 + 19 个 report 级聚合），离线**零处理**直接给模型
   - is_val：md5(reportsn)%10==0，离线导出时按它切 train/val，无需本地切分逻辑
   - 失败行保留 {"_error":...}，导出时过滤即可
 
@@ -53,6 +56,8 @@ USER_CAT_FIELDS = [
     ('pb020d01', '婚姻状况代码表'), ('pb040d02', '单位性质代码表'),
     ('pb040d03', '国民经济行业代码表'), ('pb040d04', '职业代码表'),
     ('pb040d05', '职务代码表'), ('pb040d06', '职称代码表'), ('pb030d01', '居住状况代码表'),
+    ('cert_prov', '行政区划代码表(省级)'),    # cert_no_mask 1-2 位（报文内地址是哈希，取自证件）
+    ('cert_city', '行政区划代码表(地市级)'),  # cert_no_mask 1-4 位
 ]
 ACCOUNT_CAT_FIELDS = [
     ('pd01ad02', '机构类型代码'), ('pd01ad03', '个人借贷交易业务种类代码表'),
@@ -101,11 +106,34 @@ def _years_between(d1: date, d2: date) -> float:
     return round((d1 - d2).days / 365.25, 4)
 
 
+def _cert_parts(cert):
+    """cert_no_mask（A 格式 18 位，前 14 位明文）→ (省 2 位, 市 4 位, 出生 date)。
+
+    生产报文内出生日期/地址是哈希值，户籍地区与出生日期从证件号提取
+    （口径同 mvp_user_d1.sql）：1-6 位行政区划码（1-2 省 / 1-4 市）+ 7-14 位出生日期。
+    非法格式返回 ('', '', None)，由上层走报文字段兜底。
+    """
+    cert = _s(cert)
+    if len(cert) < 14 or not cert[:6].isdigit():
+        return '', '', None
+    prov, city = cert[:2], cert[:4]
+    dob = None
+    ymd = cert[6:14]
+    if ymd.isdigit():
+        y, m, d = int(ymd[:4]), int(ymd[4:6]), int(ymd[6:8])
+        if 1900 <= y <= 2200 and 1 <= m <= 12 and 1 <= d <= 31:
+            try:
+                dob = date(y, m, d)
+            except ValueError:
+                dob = None
+    return prov, city, dob
+
+
 def _s(v):
     return str(v).strip() if v is not None else ''
 
 
-def build_user_numeric(r: dict, rt: date) -> list:
+def build_user_numeric(r: dict, rt: date, dob) -> list:
     person = r.get('personInfo') or {}
     ident = person.get('identity') or {}
     marriage = person.get('marriage') or {}
@@ -116,13 +144,10 @@ def build_user_numeric(r: dict, rt: date) -> list:
     resi0 = resis[0] if resis else {}
     header = r.get('header') or {}
 
-    cert = _s(r.get('certNo'))
-    birth_year = None
-    if len(cert) >= 10 and cert[6:10].isdigit():
-        birth_year = int(cert[6:10])
-    else:
-        dob = _pdate(ident.get('pb01ar01'))
-        birth_year = dob.year if dob else None
+    birth_year = dob.year if dob else None       # cert_no_mask 第 7-14 位（报文内是哈希）
+    if birth_year is None:
+        d0 = _pdate(ident.get('pb01ar01'))       # 报文出生日期明文时兜底（mock）
+        birth_year = d0.year if d0 else None
 
     mob_dates = [d for d in (_pdate(m.get('pb01br01')) for m in mobiles) if d]
 
@@ -146,13 +171,15 @@ def build_user_numeric(r: dict, rt: date) -> list:
     ]
 
 
-def build_user_cat(r: dict, vocab: dict) -> tuple:
+def build_user_cat(r: dict, vocab: dict, prov: str, city: str) -> tuple:
     person = r.get('personInfo') or {}
     sources = {
         **{k: person.get('identity') or {} for k in ('pb01ad01', 'pb01ad02', 'pb01ad03', 'pb01ad04', 'pb01ad05')},
         'pb020d01': person.get('marriage') or {},
         **{k: (person.get('professionals') or [{}])[0] for k in ('pb040d02', 'pb040d03', 'pb040d04', 'pb040d05', 'pb040d06')},
         'pb030d01': (person.get('residences') or [{}])[0],
+        'cert_prov': {'cert_prov': prov},
+        'cert_city': {'cert_city': city},
     }
     ids, masks = [], []
     for f, table in USER_CAT_FIELDS:
@@ -249,10 +276,12 @@ def report_aggregate_features(aggs: list, r: dict, rt: date) -> list:
     ]
 
 
-def transform_report(r: dict, vocab: dict) -> dict:
+def transform_report(r: dict, vocab: dict, cert_mask='') -> dict:
     rt = _pdate(_s(r.get('reportTime'))[:19]) or _pdate(_s(r.get('tranDate')))
+    # 生产：外部 cert_no_mask 优先（报文内证件号/出生日期/地址是哈希）；mock：报文内明文 certNo
+    prov, city, dob = _cert_parts(_s(cert_mask) or _s(r.get('certNo')))
     out = {'user_cat_ids': None, 'user_cat_mask': None}
-    out['user_cat_ids'], out['user_cat_mask'] = build_user_cat(r, vocab)
+    out['user_cat_ids'], out['user_cat_mask'] = build_user_cat(r, vocab, prov, city)
     per_type = {t: [] for t in ACCOUNT_TYPES}
     for acc in r.get('accountInfos') or []:
         built = build_account(acc, rt, vocab)
@@ -266,19 +295,22 @@ def transform_report(r: dict, vocab: dict) -> dict:
         out[f'{tl}_paystate'] = [a['paystate'] for a in lst]
         out[f'{tl}_mask'] = [1] * len(lst)
     aggs = [a['agg'] for lst in per_type.values() for a in lst]
-    out['user_numeric'] = build_user_numeric(r, rt) + report_aggregate_features(aggs, r, rt)
+    out['user_numeric'] = build_user_numeric(r, rt, dob) + report_aggregate_features(aggs, r, rt)
     return out
 
 
-def collect_vocab_values(r: dict) -> list:
+def collect_vocab_values(r: dict, cert_mask='') -> list:
     """单条报文 → ['section|table|value', ...]（供 pass1 集群 distinct）。"""
     vals = []
     person = r.get('personInfo') or {}
+    prov, city, _dob = _cert_parts(_s(cert_mask) or _s(r.get('certNo')))
     sources = {
         **{k: person.get('identity') or {} for k in ('pb01ad01', 'pb01ad02', 'pb01ad03', 'pb01ad04', 'pb01ad05')},
         'pb020d01': person.get('marriage') or {},
         **{k: (person.get('professionals') or [{}])[0] for k in ('pb040d02', 'pb040d03', 'pb040d04', 'pb040d05', 'pb040d06')},
         'pb030d01': (person.get('residences') or [{}])[0],
+        'cert_prov': {'cert_prov': prov},
+        'cert_city': {'cert_city': city},
     }
     for f, table in USER_CAT_FIELDS:
         v = _s(sources[f].get(f))
@@ -307,13 +339,13 @@ def build_vocab_from_pairs(pairs: list) -> dict:
     return vocab
 
 
-def parse_report_to_struct_json(report_json_str: str, vocab: dict) -> str:
+def parse_report_to_struct_json(report_json_str: str, vocab: dict, cert_mask='') -> str:
     """JSON 字符串 → pbc_struct JSON 字符串。单条失败不拖死 job：返回 {"_error", "report_id"}。"""
     rid = ''
     try:
         report = json.loads(report_json_str)
         rid = _s(report.get('reportsn'))
-        sample = transform_report(report, vocab)
+        sample = transform_report(report, vocab, cert_mask)
         return json.dumps(sample, ensure_ascii=False)
     except Exception as e:  # noqa: BLE001
         return json.dumps({'_error': f'{type(e).__name__}: {e}'[:200], 'report_id': rid},
@@ -325,6 +357,8 @@ def parse_report_to_struct_json(report_json_str: str, vocab: dict) -> str:
 # ============================================================
 
 RUN_DATE = '20260811'            # ← 要跑的分区日期，按需修改
+# cert_no_mask 来源（出生日期/户籍地区——报文内是哈希值）；口径同 mvp_user_d1.sql 的 v_latest_report
+CERT_TABLE = 'brm_wyd_ods_mask.cris_pbcg2_report_dcb'
 DST_TABLE = 'erm_mx_data_work.marm_pbcg2_pbcstruct_v1_ds'
 # 首次运行前需建表：
 # CREATE TABLE IF NOT EXISTS erm_mx_data_work.marm_pbcg2_pbcstruct_v1_ds (
@@ -347,21 +381,32 @@ def run_spark():
           and get_json_object(content, '$.reportsn') is not null
     ) pbcg2'''
 
+    # cert_no_mask（A 格式 18 位，前 14 位明文）：同 reportsn 多版本取最新 tran_date
+    cert_sql = f'''select reportsn, cert_no_mask from (
+        select reportsn, cert_no_mask,
+               row_number() over (partition by reportsn order by tran_date desc) as rn
+        from {CERT_TABLE}
+        where ds = '{RUN_DATE}' and cert_no_mask is not null and cert_no_mask <> ''
+    ) t where rn = 1'''
+
     spark.sql('set spark.executor.memory=50g')
     spark.sql('set hive.exec.dynamic.partition.mode=nostrict')
-    df = spark.sql(str_sql).cache()
+    df = (spark.sql(str_sql)
+          .join(spark.sql(cert_sql), 'reportsn', 'left')
+          .cache())
     n_input = df.count()
-    print(f'=== pass0 输入报文: {n_input:,} 条（ds={RUN_DATE}）===')
+    n_cert = df.where(col('cert_no_mask').isNotNull()).count()
+    print(f'=== pass0 输入报文: {n_input:,} 条（ds={RUN_DATE}，cert_no_mask 匹配 {n_cert:,}）===')
 
     # ---- pass 1：集群内 distinct 收码值 → driver 建 vocab ----
     @udf(ArrayType(StringType()))
-    def collect_vocab_udf(s):
+    def collect_vocab_udf(s, c):
         try:
-            return collect_vocab_values(json.loads(s))
+            return collect_vocab_values(json.loads(s), c)
         except Exception:
             return []
 
-    pairs = (df.select(explode(collect_vocab_udf(df['content'])).alias('kv'))
+    pairs = (df.select(explode(collect_vocab_udf(df['content'], df['cert_no_mask'])).alias('kv'))
                .distinct().collect())
     vocab = build_vocab_from_pairs([row['kv'] for row in pairs])
     n_values = sum(len(t) - 1 for s in vocab.values() for t in s.values())
@@ -378,16 +423,16 @@ def run_spark():
     vocab_bc = spark.sparkContext.broadcast(vocab)
 
     @udf(StringType())
-    def to_struct_udf(s):
-        return parse_report_to_struct_json(s, vocab_bc.value)
+    def to_struct_udf(s, c):
+        return parse_report_to_struct_json(s, vocab_bc.value, c)
 
     @udf(BooleanType())
     def is_val_udf(rid):
         return bool(rid) and int(md5(_s(rid).encode()).hexdigest(), 16) % 10 == 0
 
-    out = (df.withColumn('pbc_struct', to_struct_udf(df['content']))
+    out = (df.withColumn('pbc_struct', to_struct_udf(df['content'], df['cert_no_mask']))
              .withColumn('is_val', is_val_udf(df['reportsn']))
-             .drop('content'))
+             .drop('content').drop('cert_no_mask'))
     n_err = out.where(col('pbc_struct').like('{"_error%')).count()
     n_val = out.where(col('is_val') & ~col('pbc_struct').like('{"_error%')).count()
     print(f'=== pass2 转换完成: ok {n_input - n_err:,}（val {n_val:,} / train {n_input - n_err - n_val:,}）'
@@ -399,18 +444,22 @@ def run_spark():
 
 def local_test(path: str) -> int:
     report = json.loads(open(path, encoding='utf-8').read())
+    prov, city, dob = _cert_parts(report.get('certNo'))
+    assert prov and city and dob, f'certNo 无法解析出地区/出生日期: {report.get("certNo")!r}'
     vocab = build_vocab_from_pairs(collect_vocab_values(report))
     out = json.loads(parse_report_to_struct_json(json.dumps(report, ensure_ascii=False), vocab))
     assert '_error' not in out, out
     n_user = len(out['user_numeric'])
-    print(f'user_numeric: {n_user} 维（预期 32）')
+    n_ucat = len(out['user_cat_ids'])
+    print(f'user_numeric: {n_user} 维（预期 32）/ user_cat: {n_ucat}（预期 14，'
+          f'cert_prov={out["user_cat_ids"][-2]} cert_city={out["user_cat_ids"][-1]}）')
     for t in ACCOUNT_TYPES:
         rows = out.get(f'{t.lower()}_numeric') or []
         if rows:
             print(f'{t.lower()}: {len(rows)} 账户 × numeric {len(rows[0])} / cat {len(out[f"{t.lower()}_cat_ids"][0])} / paystate {len(out[f"{t.lower()}_paystate"][0])}')
             assert len(rows[0]) == 13 and len(out[f'{t.lower()}_cat_ids'][0]) == 13
-    assert n_user == 32
-    print('=== 本地自检通过（单文件自包含，32/13/13 维）===')
+    assert n_user == 32 and n_ucat == 14
+    print('=== 本地自检通过（单文件自包含，user 32/14，账户 13/13/60）===')
     return 0
 
 
