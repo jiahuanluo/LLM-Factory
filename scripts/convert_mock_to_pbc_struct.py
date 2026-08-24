@@ -11,8 +11,9 @@ PbcDataset 可读的 JSONL，输出与 scripts/sql/mvp_user_d1.sql + postprocess
     / _paystate[[N,60]] / _mask[N]
 
 与 SQL 端的语义对齐（字段表导入 src/pbc_credit/fields.py，单一事实源）：
-  - user 18 numeric 按 v_user 定义（certNo 出生年算年龄、手机/居住/职业计数、
-    score 5 字段等）
+  - user 32 numeric = 13 基础（v_user 定义，**不含 score 块**——生产覆盖率 4.7% 有域偏移）
+    + 19 report 级聚合（账户计数/呆账逾期/金额和/D1、R2 专项/使用率/逾期月数/查询密度；
+    公式见 fields.py USER_NUMERIC_FIELDS 注释，生产侧将来按同名公式在 v_user 补列）
   - account 13 numeric 按 v_all_accounts 定义（P1 起：+pd01cj02 已用额度、
     +pd01cj06 当前逾期、+credit_utilization=cj02/aj02 clamp[0,1.5]）；
     paystate 用 latest5yearDetails 按月排序取最近 60 月、PAYSTATE_VOCAB 编码、左 pad 0
@@ -101,7 +102,6 @@ def build_user_numeric(r: dict, rt: date) -> list[float]:
     mobiles = ident.get('mobiles') or []
     prof0 = profs[0] if profs else {}
     resi0 = resis[0] if resis else {}
-    score = r.get('score') or {}
     header = (r.get('header') or {})
 
     cert = _s(r.get('certNo'))
@@ -132,11 +132,6 @@ def build_user_numeric(r: dict, rt: date) -> list[float]:
         _years_between(rt, _pdate(resi0.get('pb030r01')))                      # yrs_at_address
         if _pdate(resi0.get('pb030r01')) else 0.0,
         1.0 if _s(marriage.get('pb020d01')) else 0.0,                          # marriage_record_count
-        _pfloat(score.get('pc010q01')) / 1000.0,                               # score_value（÷1000 缩放）
-        _pfloat(score.get('pc010q02')) / 100.0,                                # score_rank（÷100 缩放）
-        _pfloat(score.get('pc010s01')),                                        # score_query_count
-        float(len([x for x in _s(score.get('pc010d01')).split(',') if x])),    # score_num_institutions
-        1.0 if score else 0.0,                                                 # score_present
     ]
 
 
@@ -175,6 +170,22 @@ def build_account(acc: dict, rt: date, acc_fields, vocab, paystate_vocab) -> dic
     limit = _pfloat(basic.get('pd01aj02'))
     util = max(0.0, min(1.5, cj02 / limit)) if limit > 0 and cj02 > 0 else 0.0
 
+    # report 级聚合原料（transform_report 汇总成 19 个 user 聚合特征，公式见 fields.py 注释）
+    bd01, cd01 = _s(latest.get('pd01bd01')), _s(mps.get('pd01cd01'))
+    active = bool(mps) and not bd01
+    bad = bd01 == '4' or cd01 == '5'
+    overdue_flag = bd01 == '2' or cd01 in ('2', '3') or cj06 > 0
+    overdue_amt = max(_pfloat(latest.get('pd01bj02')), cj06 if cj06 > 0 else 0.0)
+    used = cj02 if active else (_pfloat(latest.get('pd01bj01')) if bd01 in ('2', '4') else 0.0)
+    rows = ((acc.get('latest5year') or {}).get('latest5yearDetails')) or []
+    overdue_months = sum(1 for x in rows if _s(x.get('pd01ed01'))[:1] in '1234567BDG' and _s(x.get('pd01ed01')))
+    agg = {
+        'atype': atype, 'active': active, 'bad': bad, 'overdue_flag': overdue_flag,
+        'balance': _pfloat(latest.get('pd01bj01')), 'overdue_amt': overdue_amt,
+        'aj01': _pfloat(basic.get('pd01aj01')), 'aj02': limit, 'used': used,
+        'util': util, 'overdue_months': overdue_months,
+    }
+
     numeric = [
         _pfloat(basic.get('pd01aj01')),
         _pfloat(basic.get('pd01aj02')),
@@ -201,14 +212,55 @@ def build_account(acc: dict, rt: date, acc_fields, vocab, paystate_vocab) -> dic
     encoded = [paystate_vocab.get(ch, 1) if ch else 0 for _, ch in by_month[-60:]]
     paystate = [0] * (60 - len(encoded)) + encoded
 
-    return {'numeric': numeric, 'cat_ids': ids, 'cat_mask': masks, 'paystate': paystate}
+    return {'numeric': numeric, 'cat_ids': ids, 'cat_mask': masks, 'paystate': paystate, 'agg': agg}
+
+
+def _report_aggregate_features(aggs: list, r: dict, rt: date) -> list:
+    """19 个 report 级统计衍生特征（公式与 fields.py USER_NUMERIC_FIELDS 注释一一对应）。
+
+    金额与大计数 log1p；比率/小计数原值。空报告全 0。
+    """
+    lp = math.log1p
+    total = len(aggs)
+    d1 = [a for a in aggs if a['atype'] == 'D1']
+    r2 = [a for a in aggs if a['atype'] == 'R2']
+    r2_utils = [a['util'] for a in r2 if a['util'] > 0]
+    queries = r.get('queryRecords') or []
+
+    def q_days(q):
+        d = _pdate(_s(q.get('ph010r01')))
+        return (rt - d).days if d else None
+
+    q_pairs = [(_s(q.get('ph010q03')), q_days(q)) for q in queries]
+    days = [d for _reason, d in q_pairs if d is not None and d >= 0]
+
+    return [
+        lp(total),
+        (sum(1 for a in aggs if a['active']) / total) if total else 0.0,
+        lp(sum(1 for a in aggs if a['bad'])),
+        lp(sum(1 for a in aggs if a['overdue_flag'])),
+        lp(sum(a['balance'] for a in aggs)),
+        lp(sum(a['overdue_amt'] for a in aggs)),
+        lp(max((a['overdue_amt'] for a in aggs), default=0.0)),
+        lp(len(d1)),
+        lp(sum(a['aj01'] for a in d1)),
+        lp(sum(a['balance'] for a in d1)),
+        lp(len(r2)),
+        lp(sum(a['aj02'] for a in r2)),
+        lp(sum(a['used'] for a in r2)),
+        (sum(r2_utils) / len(r2_utils)) if r2_utils else 0.0,
+        lp(sum(1 for a in r2 if a['util'] > 1.0)),
+        lp(sum(a['overdue_months'] for a in aggs)),
+        lp(sum(1 for d in days if d <= 31)),
+        lp(sum(1 for d in days if d <= 730)),
+        lp(sum(1 for reason, d in q_pairs if d is not None and 0 <= d <= 31 and reason in ('02', '24'))),
+    ]
 
 
 def transform_report(r: dict, user_fields, acc_fields, paystate_vocab, vocab) -> dict:
     rt = _pdate(_s(r.get('reportTime'))[:19]) or _pdate(_s(r.get('tranDate')))
     out = {
-        'user_numeric': build_user_numeric(r, rt),
-        'user_cat_ids': None, 'user_cat_mask': None,
+        'user_numeric': None, 'user_cat_ids': None, 'user_cat_mask': None,
     }
     out['user_cat_ids'], out['user_cat_mask'] = build_user_cat(r, user_fields, vocab)
     per_type = {t: [] for t in _ACCOUNT_TYPES}
@@ -223,6 +275,8 @@ def transform_report(r: dict, user_fields, acc_fields, paystate_vocab, vocab) ->
         out[f'{tl}_cat_mask'] = [a['cat_mask'] for a in lst]
         out[f'{tl}_paystate'] = [a['paystate'] for a in lst]
         out[f'{tl}_mask'] = [1] * len(lst)
+    aggs = [a['agg'] for lst in per_type.values() for a in lst]
+    out['user_numeric'] = build_user_numeric(r, rt) + _report_aggregate_features(aggs, r, rt)
     return out
 
 
