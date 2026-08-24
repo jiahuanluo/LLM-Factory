@@ -10,7 +10,33 @@ log1p 归一化全部就绪；输出仅含 reportsn + 特征，不带 PII。
 - 代码：feat 分支已合并 `worktree-mock-calibration`（含 `scripts/convert_mock_to_pbc_struct.py`）
 - 生产侧：导出原始报文 `*.json` 到一个目录（无脚本要跑）
 
-## 1. 转换（一条命令）
+## 0.5 生产内转换（原始报文量大时，推荐）：Spark UDF 版
+
+`scripts/spark_convert_pbc_struct.py`（自包含，executor 不依赖 src 包；纯函数与离线转换器
+逐位一致——已交叉验证 numeric/paystate/cat_mask 完全相同）：
+
+1. **首次先建表**（脚本头部有 DDL）：
+   ```sql
+   CREATE TABLE IF NOT EXISTS erm_mx_data_work.marm_pbcg2_pbcstruct_v1_ds
+     (busi_sno string, reportsn string, pbc_struct string)
+   PARTITIONED BY (ds string) STORED AS ORC;
+   ```
+2. 集群/notebook 粘贴整份脚本，改 `RUN_DATE`，执行 `run_spark()`：
+   - pass0 打印输入报文数（`ods_marm_raw_credit_data_bdcn_v2`，ds 分区，type 三类过滤）
+   - pass1 集群内 distinct 码值 → 建 vocab（保证 UNK=0）→ 同时落盘 `cat_vocab_prod_<ds>.json`
+   - pass2 broadcast vocab → UDF 转换 → 写结果表；**失败行保留 `{"_error":...}` 不拖死 job**
+3. **预期输出**：结果表行数 = 输入报文数，ok 率应 >99.9%；`pbc_struct` 列即 PbcDataset
+   扁平格式（user 32 + 6 类账户 13/13/60），无需 postprocess
+4. **离线取数 → 训练**：
+   ```sql
+   SELECT busi_sno, reportsn, pbc_struct FROM erm_mx_data_work.marm_pbcg2_pbcstruct_v1_ds
+   WHERE ds='<RUN_DATE>' AND pbc_struct NOT LIKE '{"_error%'
+   ```
+   导出为 `train_prod.jsonl` 后按 md5(reportsn)%10==0 切出 val，直接给 `PbcDataset`
+5. **混训注意**：Spark 版 vocab 是本次语料的 id 空间，与 `cat_vocab_mock.json` 不同；
+   混训前取两者并集、两侧重编码（pass1 落盘的 json 就是为这一步准备的）
+
+## 1. 转换（一条命令，小体量可直接导出文件时）
 
 ```bash
 python scripts/convert_mock_to_pbc_struct.py \
