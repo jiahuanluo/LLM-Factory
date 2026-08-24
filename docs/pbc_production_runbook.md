@@ -16,6 +16,13 @@ log1p 归一化全部就绪；输出仅含 reportsn + 特征，不带 PII。
 spark-submit 直接跑，不依赖仓库其它文件。与离线转换器语义逐位一致（已交叉验证，
 含 cat_ids；镜像同步要求见文件头注释）。
 
+**cert_no_mask 接入**：生产报文内的出生日期/地址是哈希值，脚本会 join
+`CERT_TABLE`（`cris_pbcg2_report_dcb`，同 reportsn 多版本取最新 tran_date，口径同
+mvp_user_d1.sql 的 v_latest_report）拿 `cert_no_mask`（A 格式 18 位、前 14 位明文）：
+1-6 位行政区划码 → cert_prov（1-2 位）/cert_city（1-4 位）两个新 cat 特征，
+7-14 位 → 出生日期（age_years 来源）。join 不上的报文走报文字段兜底（cert 特征
+mask=0）。pass0 会打印 cert 匹配数，异常低时先查两边 reportsn/ds 是否对齐。
+
 1. **首次先建表**（脚本头部有 DDL）：
    ```sql
    CREATE TABLE IF NOT EXISTS erm_mx_data_work.marm_pbcg2_pbcstruct_v1_ds
@@ -23,12 +30,14 @@ spark-submit 直接跑，不依赖仓库其它文件。与离线转换器语义�
    PARTITIONED BY (ds string) STORED AS ORC;
    ```
 2. 粘贴整份脚本，改 `RUN_DATE`，执行 `run_spark()`：
-   - pass0 打印输入报文数（`ods_marm_raw_credit_data_bdcn_v2`，ds 分区，type 三类过滤）
-   - pass1 集群内 distinct 码值 → 建 vocab（保证 UNK=0）→ 落盘 `cat_vocab_prod_<ds>.json`
+   - pass0 打印输入报文数 + cert_no_mask 匹配数（`ods_marm_raw_credit_data_bdcn_v2`，
+     ds 分区，type 三类过滤，left join cert 表）
+   - pass1 集群内 distinct 码值（含 cert_prov/cert_city）→ 建 vocab（保证 UNK=0）
+     → 落盘 `cat_vocab_prod_<ds>.json`
    - pass2 broadcast vocab → UDF 转换 + **`is_val` 切分列**（md5(reportsn)%10==0）→ 写表；
      **失败行保留 `{"_error":...}` 不拖死 job**；结尾打印 ok/val/train/失败 计数
 3. **预期输出**：表行数 = 输入报文数（ok 率应 >99.9%）；`pbc_struct` 列即 PbcDataset
-   最终格式（user 32 + 6 类账户 13/13/60，含 log1p + 19 聚合），离线**零处理**
+   最终格式（user 32 numeric + 14 cat + 6 类账户 13/13/60，含 log1p + 19 聚合），离线**零处理**
 4. **离线取数 → 训练**（两条 SQL 导出即训练文件，无需任何本地转换/切分）：
    ```sql
    SELECT reportsn, pbc_struct FROM erm_mx_data_work.marm_pbcg2_pbcstruct_v1_ds
@@ -62,7 +71,8 @@ python scripts/convert_mock_to_pbc_struct.py \
 
 - [ ] 行数 ≈ 导出报文数 − 跳过数
 - [ ] **UNK = 0**；不为 0 说明真实语料有码值表外新值（先人工确认再重建 vocab）
-- [ ] 抽一条看维度：`user_numeric` 32、每账户 numeric 13 / cat 13 / paystate 60
+- [ ] 抽一条看维度：`user_numeric` 32、`user_cat_ids` 14（尾 2 项 cert_prov/cert_city
+      应 mask=1）、每账户 numeric 13 / cat 13 / paystate 60
 - [ ] `max 账户数`：>500 的大报告训练时显存吃紧，先小 batch 试跑（top-K 截断是待办）
 - [ ] 金额口径确认为"元"（转换器按元做 log1p；若生产导出为万元需先换算）
 
