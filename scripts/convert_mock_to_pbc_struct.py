@@ -44,8 +44,6 @@ PbcDataset 可读的 JSONL，输出与 scripts/sql/mvp_user_d1.sql + postprocess
       --vocab-name cat_vocab_prod.json \
       --train-name train_prod.jsonl --val-name val_prod.jsonl
 """
-from __future__ import annotations
-
 import argparse
 import json
 import math
@@ -75,9 +73,16 @@ def _load_fields(pbc_src: str):
 def _pdate(v):
     if not v or not isinstance(v, str) or len(v) < 10:
         return None
+    # 手写解析：与 spark_convert_pbc_struct.py 保持逐位一致（且兼容老版本 Python）
+    s = v[:10]
+    if len(s) != 10 or s[4] != '-' or s[7] != '-':
+        return None
     try:
-        return date.fromisoformat(v[:10])
-    except ValueError:
+        y, m, d = int(s[0:4]), int(s[5:7]), int(s[8:10])
+        if not (1 <= m <= 12 and 1 <= d <= 31):
+            return None
+        return date(y, m, d)
+    except (ValueError, TypeError):
         return None
 
 

@@ -29,8 +29,6 @@ vocab 两遍扫描：pass1 集群内 distinct 码值 → driver 建 vocab（0=UN
 本地自检（无 pyspark 依赖）：
   python scripts/spark_convert_pbc_struct.py --local-test <某份报文.json>
 """
-from __future__ import annotations
-
 import json
 import math
 import sys
@@ -76,9 +74,16 @@ LOG1P_COLS = {0, 1, 2, 4, 5, 6, 7, 12}
 def _pdate(v):
     if not v or not isinstance(v, str) or len(v) < 10:
         return None
+    # 手写解析：executor 是老版本 Python（无 date.fromisoformat，3.7 才有）
+    s = v[:10]
+    if len(s) != 10 or s[4] != '-' or s[7] != '-':
+        return None
     try:
-        return date.fromisoformat(v[:10])
-    except ValueError:
+        y, m, d = int(s[0:4]), int(s[5:7]), int(s[8:10])
+        if not (1 <= m <= 12 and 1 <= d <= 31):
+            return None
+        return date(y, m, d)
+    except (ValueError, TypeError):
         return None
 
 
