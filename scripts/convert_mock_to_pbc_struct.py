@@ -30,11 +30,19 @@ PbcDataset 可读的 JSONL，输出与 scripts/sql/mvp_user_d1.sql + postprocess
      量纲会主导 user 分支 MSE，其余 16 列学不动）
 
 用法：
-  # 1) 构建 vocab + 编码（一次完成；vocab 已存在时仅编码并校验无新值）
+  # 1) 本地文件模式：构建 vocab + 编码（一次完成；vocab 已存在时仅编码并校验无新值）
   python scripts/convert_mock_to_pbc_struct.py \
       --src data/pbc/cris_json_split_calibrated \
       --out-dir data/pbc/processed \
       --pbc-src src            # 含 src/pbc_credit 的 checkout（默认本仓库根）
+
+  # 2) Spark dump 模式：集群内已用 spark_convert_pbc_struct.py 转完，本地只做
+  #    _error 过滤 + 确定性切分 + 统计（不重转换）
+  python scripts/convert_mock_to_pbc_struct.py \
+      --from-dump dump_prod.jsonl \
+      --out-dir data/pbc/processed_prod \
+      --vocab-name cat_vocab_prod.json \
+      --train-name train_prod.jsonl --val-name val_prod.jsonl
 """
 from __future__ import annotations
 
@@ -282,6 +290,19 @@ def transform_report(r: dict, user_fields, acc_fields, paystate_vocab, vocab) ->
 
 # ---------- vocab 构建 ----------
 
+def vocab_from_sets(vals: dict) -> dict:
+    """{'user': {table: set(values)}, 'account': {...}} → vocab（0=<UNK>，1..N 按字典序）。
+
+    id 排序规则的单一来源：本地 collect_vocab_values 与 Spark 端（spark_convert_pbc_struct.py）
+    都走这里，保证两端 id 空间一致。
+    """
+    vocab = {'user': {}, 'account': {}}
+    for sec in ('user', 'account'):
+        for table, vs in sorted(vals.get(sec, {}).items()):
+            vocab[sec][table] = {'<UNK>': 0, **{v: i for i, v in enumerate(sorted(vs), start=1)}}
+    return vocab
+
+
 def collect_vocab_values(reports: list, user_fields, acc_fields) -> dict:
     vals = {'user': defaultdict(set), 'account': defaultdict(set)}
     for r in reports:
@@ -303,18 +324,68 @@ def collect_vocab_values(reports: list, user_fields, acc_fields) -> dict:
                 v = _s(cat_src.get(f))
                 if v:
                     vals['account'][table].add(v)
-    vocab = {'user': {}, 'account': {}}
-    for sec in ('user', 'account'):
-        for table, vs in sorted(vals[sec].items()):
-            vocab[sec][table] = {'<UNK>': 0, **{v: i for i, v in enumerate(sorted(vs), start=1)}}
-    return vocab
+    return vocab_from_sets(vals)
 
 
 # ---------- main ----------
 
+def run_from_dump(args) -> int:
+    """Spark 结果表导出 JSONL → 过滤 _error → md5 确定性切分 → train/val + 统计。
+
+    pbc_struct 已是最终格式（Spark UDF 用同一套转换逻辑产出），本模式**不做任何重转换**；
+    vocab 不重建——用 Spark pass1 落盘的同名 vocab 文件（缺失时告警）。
+    """
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if not (out_dir / args.vocab_name).exists():
+        print(f'warn: {out_dir / args.vocab_name} 不存在——训练需要 Spark pass1 落盘的 vocab，'
+              f'请拷贝到该路径（id 空间必须与转换时一致）')
+
+    n_ok = n_err = n_train = n_val = 0
+    acc_counts = Counter()
+    train_f = open(out_dir / args.train_name, 'w', encoding='utf-8')
+    val_f = open(out_dir / args.val_name, 'w', encoding='utf-8')
+    with open(args.from_dump, encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            outer = json.loads(line)
+            struct = outer.get('pbc_struct')
+            if not isinstance(struct, str) or not struct:
+                continue
+            if struct.lstrip().startswith('{"_error'):
+                n_err += 1
+                continue
+            rid = _s(outer.get('reportsn')) or _s(outer.get('busi_sno'))
+            payload = {'reportsn': rid, 'pbc_struct': struct}
+            if _s(outer.get('busi_sno')):
+                payload['busi_sno'] = _s(outer['busi_sno'])   # 留给标签 join
+            f_out = val_f if int(md5(rid.encode()).hexdigest(), 16) % args.val_holdout == 0 else train_f
+            f_out.write(json.dumps(payload, ensure_ascii=False) + '\n')
+            if f_out is train_f:
+                n_train += 1
+            else:
+                n_val += 1
+            n_ok += 1
+            sample = json.loads(struct)
+            for t in _ACCOUNT_TYPES:
+                acc_counts[t] += len(sample.get(f'{t.lower()}_mask') or [])
+    train_f.close()
+    val_f.close()
+
+    print(f'完成: ok {n_ok}（train {n_train} / val {n_val}，holdout 1/{args.val_holdout}）| _error 过滤 {n_err}')
+    print(f'账户分布: {dict(acc_counts)}')
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description='Mock JSON → pbc_struct 转换器（对齐 mvp_user_d1.sql）')
-    ap.add_argument('--src', required=True, help='校准后 mock 报告目录')
+    g = ap.add_mutually_exclusive_group(required=True)
+    g.add_argument('--src', help='CrisPbc JSON 报文目录（本地文件模式，全量转换）')
+    g.add_argument('--from-dump', dest='from_dump',
+                   help='Spark 结果表导出的 JSONL（每行含 reportsn/pbc_struct[+busi_sno/ds]）：'
+                        '只做 _error 过滤 + 确定性切分 + 统计，不重转换')
     ap.add_argument('--out-dir', required=True, help='输出目录（processed/）')
     ap.add_argument('--pbc-src', default=str(Path(__file__).resolve().parents[1] / 'src'),
                     help='含 src/pbc_credit 的 checkout（导入 fields.py 单一事实源）')
@@ -323,6 +394,9 @@ def main() -> int:
     ap.add_argument('--val-name', default='val_mock.jsonl')
     ap.add_argument('--val-holdout', type=int, default=10, help='md5 %% N == 0 进 val（N=10 → 10%%）')
     args = ap.parse_args()
+
+    if args.from_dump:
+        return run_from_dump(args)
 
     paystate_vocab, user_fields, acc_fields = _load_fields(args.pbc_src)
 

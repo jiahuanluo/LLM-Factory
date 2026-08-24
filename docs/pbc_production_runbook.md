@@ -30,9 +30,17 @@ log1p 归一化全部就绪；输出仅含 reportsn + 特征，不带 PII。
 4. **离线取数 → 训练**：
    ```sql
    SELECT busi_sno, reportsn, pbc_struct FROM erm_mx_data_work.marm_pbcg2_pbcstruct_v1_ds
-   WHERE ds='<RUN_DATE>' AND pbc_struct NOT LIKE '{"_error%'
+   WHERE ds='<RUN_DATE>'
    ```
-   导出为 `train_prod.jsonl` 后按 md5(reportsn)%10==0 切出 val，直接给 `PbcDataset`
+   导出为 dump 后一条命令完成 `_error` 过滤 + 确定性切分 + 统计（不重转换，`busi_sno` 保留供标签 join）：
+   ```bash
+   python scripts/convert_mock_to_pbc_struct.py \
+       --from-dump dump_prod.jsonl \
+       --out-dir data/pbc/processed_prod \
+       --vocab-name cat_vocab_prod.json \
+       --train-name train_prod.jsonl --val-name val_prod.jsonl
+   ```
+   （`cat_vocab_prod.json` 用 Spark pass1 落盘的文件拷到 out-dir）
 5. **混训注意**：Spark 版 vocab 是本次语料的 id 空间，与 `cat_vocab_mock.json` 不同；
    混训前取两者并集、两侧重编码（pass1 落盘的 json 就是为这一步准备的）
 
