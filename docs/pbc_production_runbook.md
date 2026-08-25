@@ -16,12 +16,11 @@ log1p 归一化全部就绪；输出仅含 reportsn + 特征，不带 PII。
 spark-submit 直接跑，不依赖仓库其它文件。与离线转换器语义逐位一致（已交叉验证，
 含 cat_ids；镜像同步要求见文件头注释）。
 
-**cert_no_mask 接入**：生产报文内的出生日期/地址是哈希值，脚本会 join
-`CERT_TABLE`（`cris_pbcg2_report_dcb`，同 reportsn 多版本取最新 tran_date，口径同
-mvp_user_d1.sql 的 v_latest_report）拿 `cert_no_mask`（A 格式 18 位、前 14 位明文）：
-1-6 位行政区划码 → cert_prov（1-2 位）/cert_city（1-4 位）两个新 cat 特征，
-7-14 位 → 出生日期（age_years 来源）。join 不上的报文走报文字段兜底（cert 特征
-mask=0）。pass0 会打印 cert 匹配数，异常低时先查两边 reportsn/ds 是否对齐。
+**输入单表**：`erm_mx_data_work.nluv4_pbcg2_content_merged`（busi_sno, reportsn,
+content, cert_no_mask 已在生产合并，**无需 join**）。生产报文内的出生日期/地址是
+哈希值：cert_no_mask（A 格式 18 位、前 14 位明文）1-6 位行政区划码 → cert_prov
+（1-2 位）/cert_city（1-4 位）两个 cat 特征，7-14 位 → 出生日期（age_years 来源）。
+cert_no_mask 为空的行走报文字段兜底（cert 特征 mask=0）。pass0 会打印 cert 非空数。
 
 1. **首次先建表**（脚本头部有 DDL）：
    ```sql
@@ -29,9 +28,8 @@ mask=0）。pass0 会打印 cert 匹配数，异常低时先查两边 reportsn/d
      (busi_sno string, reportsn string, pbc_struct string, is_val boolean)
    PARTITIONED BY (ds string) STORED AS ORC;
    ```
-2. 粘贴整份脚本，改 `RUN_DATE`，执行 `run_spark()`：
-   - pass0 打印输入报文数 + cert_no_mask 匹配数（`ods_marm_raw_credit_data_bdcn_v2`，
-     ds 分区，type 三类过滤，left join cert 表）
+2. 粘贴整份脚本，改 `RUN_DATE`（输出分区日期），执行 `run_spark()`：
+   - pass0 打印输入报文数 + cert_no_mask 非空数（读 `SRC_TABLE` 全表，写入 ds=RUN_DATE 分区）
    - pass1 集群内 distinct 码值（含 cert_prov/cert_city）→ 建 vocab（保证 UNK=0）
      → 落盘 `cat_vocab_prod_<ds>.json`
    - pass2 broadcast vocab → UDF 转换 + **`is_val` 切分列**（md5(reportsn)%10==0）→ 写表；

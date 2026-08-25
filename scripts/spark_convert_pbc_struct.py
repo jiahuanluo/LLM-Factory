@@ -3,10 +3,10 @@
 **自包含单文件**：粘贴进 notebook / spark-submit 直接跑，不依赖仓库其它文件
 （不 import convert_mock_to_pbc_struct / src）。
 
-数据源：brm_wyd_ods_mask.ods_marm_raw_credit_data_bdcn_v2（content = 完整报文 JSON）
-  + cert_no_mask：join CERT_TABLE（同 reportsn 多版本取最新 tran_date）。
-    生产报文内的出生日期/地址是哈希值，户籍省/市与出生日期改从 cert_no_mask 提取
-    （A 格式 18 位、前 14 位明文：1-6 位行政区划码[1-2 省/1-4 市]、7-14 位出生日期）
+数据源：erm_mx_data_work.nluv4_pbcg2_content_merged（生产已合并单表，无需 join）：
+  busi_sno | reportsn | content（完整报文 JSON）| cert_no_mask
+  生产报文内的出生日期/地址是哈希值，户籍省/市与出生日期改从 cert_no_mask 提取
+  （A 格式 18 位、前 14 位明文：1-6 位行政区划码[1-2 省/1-4 市]、7-14 位出生日期）
 输出表：erm_mx_data_work.marm_pbcg2_pbcstruct_v1_ds
   busi_sno | reportsn | pbc_struct | is_val | ds
   - pbc_struct：PbcDataset 最终格式（user 32 numeric + 14 cat + 6 类账户
@@ -356,9 +356,10 @@ def parse_report_to_struct_json(report_json_str: str, vocab: dict, cert_mask='')
 # Spark driver（集群上执行；本地自检走 --local-test）
 # ============================================================
 
-RUN_DATE = '20260811'            # ← 要跑的分区日期，按需修改
-# cert_no_mask 来源（出生日期/户籍地区——报文内是哈希值）；口径同 mvp_user_d1.sql 的 v_latest_report
-CERT_TABLE = 'brm_wyd_ods_mask.cris_pbcg2_report_dcb'
+RUN_DATE = '20260811'            # ← 输出写入的分区日期（输入表无 ds），按需修改
+# 输入单表：content（完整报文 JSON）与 cert_no_mask（出生日期/户籍地区，报文内是哈希）
+# 已在生产合并好，无需再 join 拆分表
+SRC_TABLE = 'erm_mx_data_work.nluv4_pbcg2_content_merged'
 DST_TABLE = 'erm_mx_data_work.marm_pbcg2_pbcstruct_v1_ds'
 # 首次运行前需建表：
 # CREATE TABLE IF NOT EXISTS erm_mx_data_work.marm_pbcg2_pbcstruct_v1_ds (
@@ -370,33 +371,19 @@ def run_spark():
     from pyspark.sql.functions import col, explode, udf
     from pyspark.sql.types import ArrayType, BooleanType, StringType
 
+    # 输入即生产合并单表（content + cert_no_mask 同行），无需 join；ds 用输出分区日期字面量
     str_sql = f'''select
-        busi_sno, content, pbcg2.reportsn, ds
-    from (
-        select busi_sno, content, ds,
-               get_json_object(content, '$.reportsn') as reportsn
-        from brm_wyd_ods_mask.ods_marm_raw_credit_data_bdcn_v2
-        where ds = '{RUN_DATE}'
-          and type in ('PBCG2', 'V2_CRIS_PBC_G2', 'CRIS_PBC_G2_TOUT')
-          and get_json_object(content, '$.reportsn') is not null
-    ) pbcg2'''
-
-    # cert_no_mask（A 格式 18 位，前 14 位明文）：同 reportsn 多版本取最新 tran_date
-    cert_sql = f'''select reportsn, cert_no_mask from (
-        select reportsn, cert_no_mask,
-               row_number() over (partition by reportsn order by tran_date desc) as rn
-        from {CERT_TABLE}
-        where ds = '{RUN_DATE}' and cert_no_mask is not null and cert_no_mask <> ''
-    ) t where rn = 1'''
+        busi_sno, reportsn, content, cert_no_mask, '{RUN_DATE}' as ds
+    from {SRC_TABLE}
+    where content is not null and reportsn is not null'''
 
     spark.sql('set spark.executor.memory=50g')
     spark.sql('set hive.exec.dynamic.partition.mode=nostrict')
-    df = (spark.sql(str_sql)
-          .join(spark.sql(cert_sql), 'reportsn', 'left')
-          .cache())
+    df = spark.sql(str_sql).cache()
     n_input = df.count()
     n_cert = df.where(col('cert_no_mask').isNotNull()).count()
-    print(f'=== pass0 输入报文: {n_input:,} 条（ds={RUN_DATE}，cert_no_mask 匹配 {n_cert:,}）===')
+    print(f'=== pass0 输入报文: {n_input:,} 条（{SRC_TABLE}，cert_no_mask 非空 {n_cert:,}，'
+          f'写入 ds={RUN_DATE}）===')
 
     # ---- pass 1：集群内 distinct 收码值 → driver 建 vocab ----
     @udf(ArrayType(StringType()))
