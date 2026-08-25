@@ -1,105 +1,68 @@
-"""Vocab 构建：码值表 xlsx → cat_vocab.json.
+"""Vocab 加载：cat_vocab_prod.json（SQL 端 04_build_cat_vocab.sql 的 dump 聚合版）。
 
-cat_vocab.json 格式：
+cat_vocab_prod.json 格式：
 {
-  "user": {"性别代码表": {"<UNK>": 0, "0": 1, "1": 2, ...}, ...},
-  "account": {"<表名>": {...}, ...},
-  ...
+  "user": {"性别代码表": {"<UNK>": 0, "1": 1, ...}, ...},
+  "account": {"机构类型代码": {...}, ...}
 }
 
-id 0 固定为 <UNK>（缺失/未见）。
+编码（cat → id）已全部在 SQL 端通过 JOIN jiahuanluo_ind.cat_vocab 完成；
+Python 端只消费 vocab 大小（构建 model config 的 embedding 尺寸），
+不再做 encode。
+
+id 分配（SQL 与 Python dump 聚合一致）：0=<UNK>，1..N 按 code_value 字典序。
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-from .fields import (
-    USER_CAT_FIELDS, ACCOUNT_CAT_FIELDS, QUERY_CAT_FIELDS,
-    SUMMARY_TABLES, PAYSTATE_VOCAB, PAYSTATE_VOCAB_SIZE,
-    PUBLIC_TYPE_VOCAB, PUBLIC_TYPE_VOCAB_SIZE,
-    OBLIGATIONS_CAT_FIELDS, OBLIGATION_TYPE_VOCAB, OBLIGATION_TYPE_VOCAB_SIZE,
-)
-
-
-def build_vocab_from_codetable(xlsx_path: str | Path) -> dict:
-    """从 个人征信码值表.xlsx 构建每张表的 code → id 映射。"""
-    try:
-        import openpyxl
-    except ImportError as e:
-        raise ImportError("需要 openpyxl: pip install openpyxl") from e
-
-    wb = openpyxl.load_workbook(str(xlsx_path), read_only=True, data_only=True)
-    ws = wb[wb.sheetnames[0]]
-
-    # group by 第一列（关键字 / 码值表名）
-    tables: dict[str, dict[str, int]] = {}
-    for row in ws.iter_rows(values_only=True):
-        if not row or row[0] is None:
-            continue
-        name = str(row[0]).strip()
-        if name in ('关键字', '关键字 ',):
-            continue
-        code = row[1]
-        if code is None:
-            continue
-        code = str(code).strip()
-        tables.setdefault(name, {}).setdefault('<UNK>', 0)
-        if code not in tables[name]:
-            tables[name][code] = len(tables[name])
-
-    return tables
+from .fields import USER_CAT_FIELDS, ACCOUNT_CAT_FIELDS
 
 
 def collect_used_tables() -> dict[str, list[str]]:
     """收集代码中真正用到的码值表名，按分支分组。"""
-    used = {'user': [], 'summary': [], 'account': [], 'query': [], 'obligation': []}
-    for path, table in USER_CAT_FIELDS:
+    used = {'user': [], 'account': []}
+    for _field, table in USER_CAT_FIELDS:
         if table:
             used['user'].append(table)
-    for _path, is_list, _nums, cats in SUMMARY_TABLES:
-        for _f, t in cats:
-            if t:
-                used['summary'].append(t)
-    for _path, table in ACCOUNT_CAT_FIELDS:
+    for _field, table in ACCOUNT_CAT_FIELDS:
         if table:
             used['account'].append(table)
-    for _path, table in QUERY_CAT_FIELDS:
-        if table:
-            used['query'].append(table)
-    for _obl_t, _f, table in OBLIGATIONS_CAT_FIELDS:
-        if table:
-            used['obligation'].append(table)
     return used
 
 
-def build_cat_vocab(xlsx_path: str | Path | None = None) -> dict:
-    """构建完整 cat_vocab（含特殊 vocab 如 paystate、public_type、obligation_type）。"""
-    if xlsx_path is None:
-        # 默认路径
-        p = Path('data/home-credit/个人征信/个人征信码值表.xlsx')
-        if not p.exists():
-            p = Path('data/pbc/个人征信码值表.xlsx')
-        xlsx_path = p
+def build_cat_vocab(dump_path: str | Path) -> dict:
+    """从 SQL dump JSONL（04_build_cat_vocab.sql 最后的 SELECT 输出）聚合 vocab。
 
-    tables = build_vocab_from_codetable(xlsx_path)
-    used = collect_used_tables()
+    每行：{"section": "user", "code_table": "性别代码表", "code_value": "1"}
+    """
+    from collections import defaultdict
+
+    vocab_data = defaultdict(lambda: defaultdict(set))
+    with open(dump_path, encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            section = row.get('section')
+            table = row.get('code_table')
+            value = row.get('code_value')
+            if section and table and value is not None:
+                vocab_data[section][table].add(str(value))
 
     vocab: dict[str, dict[str, dict]] = {}
-    for branch, table_names in used.items():
-        vocab[branch] = {}
-        for name in table_names:
-            if name in tables:
-                vocab[branch][name] = tables[name]
-            else:
-                # 码值表里没找到，用空表（只有 UNK）
-                vocab[branch][name] = {'<UNK>': 0}
-
-    # 特殊 vocab
-    vocab['paystate'] = {'<all>': PAYSTATE_VOCAB}
-    vocab['public_type'] = {'<all>': PUBLIC_TYPE_VOCAB}
-    vocab['obligation_type'] = {'<all>': OBLIGATION_TYPE_VOCAB}
-
+    for section, tables in vocab_data.items():
+        vocab[section] = {}
+        for table, values in tables.items():
+            table_vocab = {'<UNK>': 0}
+            for i, v in enumerate(sorted(values), start=1):
+                table_vocab[v] = i
+            vocab[section][table] = table_vocab
     return vocab
 
 
@@ -116,16 +79,11 @@ def load_vocab(path: str | Path) -> dict:
 
 def get_vocab_size(branch: str, table: str, vocab: dict) -> int:
     """返回某分支某表 vocab 大小（含 UNK）。"""
-    if branch in ('paystate', 'public_type', 'obligation_type'):
-        return len(vocab[branch]['<all>'])
     return len(vocab.get(branch, {}).get(table, {'<UNK>': 0}))
 
 
 def encode_value(branch: str, table: str, value, vocab: dict) -> int:
-    """把码值编码成 id；空值/未知都返回 0 (<UNK>)。"""
+    """把码值编码成 id；空值/未知都返回 0 (<UNK>)。（仅调试/验证用，训练不走这里）"""
     if value is None or value == '':
         return 0
-    if branch in ('paystate', 'public_type', 'obligation_type'):
-        return vocab[branch]['<all>'].get(value, 0)
-    table_vocab = vocab.get(branch, {}).get(table, {})
-    return table_vocab.get(str(value).strip(), 0)
+    return vocab.get(branch, {}).get(table, {}).get(str(value).strip(), 0)

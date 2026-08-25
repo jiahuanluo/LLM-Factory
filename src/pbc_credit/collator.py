@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import torch
 
+from .fields import ACCOUNT_TYPES
+
 
 def pad_2d(tensors: list[torch.Tensor], masks: list[torch.Tensor], pad_value: float = 0.0):
     """Pad list of [N_i, F] → [B, N_max, F]. Masks [N_i] → [B, N_max]."""
@@ -41,23 +43,8 @@ def pad_paystate(tensors: list[torch.Tensor], masks: list[torch.Tensor]):
     return padded
 
 
-def pad_1d(tensors: list[torch.Tensor], pad_value: int = 0):
-    """Pad list of [L_i] long tensors to [B, L_max]."""
-    B = len(tensors)
-    L_max = max((t.shape[0] for t in tensors), default=0)
-    if L_max == 0:
-        return torch.zeros(B, 0, dtype=tensors[0].dtype if tensors else torch.long)
-    dtype = tensors[0].dtype
-    padded = torch.full((B, L_max), pad_value, dtype=dtype)
-    for i, t in enumerate(tensors):
-        n = t.shape[0]
-        if n > 0:
-            padded[i, :n] = t
-    return padded
-
-
 class PbcCollator:
-    """Batch samples to model-ready dict."""
+    """Batch samples to model-ready dict（user + 6 类账户）。"""
 
     def __call__(self, samples: list[dict]) -> dict:
         batch: dict = {}
@@ -67,13 +54,8 @@ class PbcCollator:
         batch['user_cat_ids'] = torch.stack([s['user_cat_ids'] for s in samples])
         batch['user_cat_mask'] = torch.stack([s['user_cat_mask'] for s in samples])
 
-        # 2. summary (fixed)
-        batch['summary_numeric'] = torch.stack([s['summary_numeric'] for s in samples])
-        batch['summary_cat_ids'] = torch.stack([s['summary_cat_ids'] for s in samples])
-        batch['summary_cat_mask'] = torch.stack([s['summary_cat_mask'] for s in samples])
-
-        # 3. accounts (variable, 6 types: d1/r1/r2/r3/r4/c1)
-        for t_lower in ['d1', 'r1', 'r2', 'r3', 'r4', 'c1']:
+        # 2. accounts (variable, 6 types: d1/r1/r2/r3/r4/c1)
+        for t_lower in [t.lower() for t in ACCOUNT_TYPES]:
             num_t = [s[f'{t_lower}_numeric'] for s in samples]
             mask_t = [s[f'{t_lower}_mask'] for s in samples]
             cat_t = [s[f'{t_lower}_cat_ids'] for s in samples]
@@ -88,37 +70,7 @@ class PbcCollator:
             batch[f'{t_lower}_paystate'] = padded_pay
             batch[f'{t_lower}_mask'] = padded_mask
 
-        # 4. queries
-        q_num = [s['query_numeric'] for s in samples]
-        q_mask = [s['query_mask'] for s in samples]
-        q_cat = [s['query_cat_ids'] for s in samples]
-        padded_qnum, padded_qmask = pad_2d(q_num, q_mask, pad_value=0.0)
-        padded_qcat, _ = pad_2d(q_cat, q_mask, pad_value=0)
-        batch['query_numeric'] = padded_qnum
-        batch['query_cat_ids'] = padded_qcat
-        batch['query_mask'] = padded_qmask
-
-        # 5. publics
-        p_num = [s['public_numeric'] for s in samples]
-        p_mask = [s['public_mask'] for s in samples]
-        p_cat = [s['public_cat_ids'] for s in samples]
-        padded_pnum, padded_pmask = pad_2d(p_num, p_mask, pad_value=0.0)
-        padded_pcat, _ = pad_2d(p_cat, p_mask, pad_value=0)
-        batch['public_numeric'] = padded_pnum
-        batch['public_cat_ids'] = padded_pcat
-        batch['public_mask'] = padded_pmask
-
-        # 6. obligations（合并 agreement + postpay + related_repay）
-        o_num = [s['obligation_numeric'] for s in samples]
-        o_mask = [s['obligation_mask'] for s in samples]
-        o_cat = [s['obligation_cat_ids'] for s in samples]
-        padded_onum, padded_omask = pad_2d(o_num, o_mask, pad_value=0.0)
-        padded_ocat, _ = pad_2d(o_cat, o_mask, pad_value=0)
-        batch['obligation_numeric'] = padded_onum
-        batch['obligation_cat_ids'] = padded_ocat
-        batch['obligation_mask'] = padded_omask
-
-        # 7. target (optional)
+        # 3. target (optional)
         if 'target' in samples[0]:
             batch['target'] = torch.stack([s['target'] for s in samples]).squeeze(-1)
 

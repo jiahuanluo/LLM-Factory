@@ -1,192 +1,210 @@
-"""端到端测试：用真实生产报告 + 多样化报告验证整个 pipeline。
+"""端到端测试：SQL 物化表 dump → postprocess → PbcDataset → collator → model。
 
-覆盖：
-1. 598 份生产 mock（data/pbc/cris_json_split/）→ build_sample + encode_sample 不报错
-2. 多样化报告（data/pbc/cris_json_diverse/，含 13 种扰动）→ 不报错
-3. 用真实报告 batch → pretrain forward + loss.backward
-4. 用真实报告 batch → finetune forward + loss.backward
+数据形态对齐 scripts/postprocess_pbc_struct.py 的输出契约：
+  {"reportsn": "...", "pbc_struct": "<stringified flat sample>"}
+不再依赖本地 mock JSON 报告（旧 sample_builder 路径已废弃，数据由 SQL 产出）。
 """
 import json
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import torch
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'src'))
 
-from pbc_credit.collator import PbcCollator
-from pbc_credit.fields import (
-    PAYSTATE_VOCAB_SIZE, PUBLIC_TYPE_VOCAB_SIZE, OBLIGATION_TYPE_VOCAB_SIZE,
-    USER_CAT_FIELDS, ACCOUNT_CAT_FIELDS, QUERY_CAT_FIELDS,
-    SUMMARY_TABLES, OBLIGATIONS_CAT_FIELDS,
-)
-from pbc_credit.losses import pretrain_loss, finetune_loss
-from pbc_credit.masking import add_masks_to_batch
-from pbc_credit.model import PbcCreditModel, PbcCreditModelConfig
-from pbc_credit.sample_builder import build_sample, encode_sample
-from pbc_credit.vocab import build_cat_vocab, load_vocab
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
-PROD_DIR = REPO_ROOT / 'data' / 'pbc' / 'cris_json_split'
-DIVERSE_DIR = REPO_ROOT / 'data' / 'pbc' / 'cris_json_diverse'
+sys.path.insert(0, str(REPO_ROOT / 'scripts'))
+
+from postprocess_pbc_struct import transform_sample  # noqa: E402
+
+from pbc_credit.collator import PbcCollator  # noqa: E402
+from pbc_credit.dataset import PbcDataset  # noqa: E402
+from pbc_credit.fields import (  # noqa: E402
+    ACCOUNT_TYPES, USER_CAT_FIELDS, ACCOUNT_CAT_FIELDS,
+    USER_NUMERIC_DIM, USER_CAT_DIM, ACCOUNT_NUMERIC_DIM, ACCOUNT_CAT_DIM,
+    PAYSTATE_LEN, PAYSTATE_VOCAB_SIZE,
+)
+from pbc_credit.losses import pretrain_loss, finetune_loss  # noqa: E402
+from pbc_credit.masking import add_masks_to_batch  # noqa: E402
+from pbc_credit.model import PbcCreditModel, PbcCreditModelConfig  # noqa: E402
+from pbc_credit.vocab import build_cat_vocab  # noqa: E402
 
 
-def _load_vocab():
-    p = REPO_ROOT / 'data' / 'pbc' / 'processed' / 'cat_vocab.json'
-    if p.exists():
-        return load_vocab(p)
-    return build_cat_vocab()
+def _make_sql_struct(counts: dict[str, int]) -> dict:
+    """构造 postprocess 输入侧（SQL TO_JSON 输出）的内层 struct。"""
+    struct = {
+        'user_numeric': [round(0.1 * i, 2) for i in range(USER_NUMERIC_DIM)],
+        'user_cat_ids': [1 + (i % 4) for i in range(USER_CAT_DIM)],
+        'user_cat_mask': [i % 2 for i in range(USER_CAT_DIM)],
+    }
+    for t in [x.lower() for x in ACCOUNT_TYPES]:
+        n = counts.get(t, 0)
+        struct[t] = [
+            {
+                'numeric': [round(0.1 * j, 2) for j in range(ACCOUNT_NUMERIC_DIM)],
+                'cat_ids': [1 + (j % 4) for j in range(ACCOUNT_CAT_DIM)],
+                'cat_mask': [1] * ACCOUNT_CAT_DIM,
+                'paystate': [0] * 20 + [1 + (j % 19) for j in range(PAYSTATE_LEN - 20)],
+            }
+            for _ in range(n)
+        ]
+    return struct
 
 
-def _build_cfg(vocab):
-    user_tables = {t: len(vocab.get('user', {}).get(t, {'<UNK>': 0})) + 1
-                   for _p, t in USER_CAT_FIELDS if t}
-    summary_tables = {}
-    for _n, _l, _nf, cats in SUMMARY_TABLES:
-        for _f, t in cats:
-            if t and t not in summary_tables:
-                summary_tables[t] = len(vocab.get('summary', {}).get(t, {'<UNK>': 0})) + 1
-    acc_tables = {t: len(vocab.get('account', {}).get(t, {'<UNK>': 0})) + 1
-                  for _f, t in ACCOUNT_CAT_FIELDS if t}
-    q_tables = {t: len(vocab.get('query', {}).get(t, {'<UNK>': 0})) + 1
-                for _f, t in QUERY_CAT_FIELDS if t}
-    obl_tables = {}
-    for _ot, _f, t in OBLIGATIONS_CAT_FIELDS:
-        if t and t not in obl_tables:
-            obl_tables[t] = len(vocab.get('obligation', {}).get(t, {'<UNK>': 0})) + 1
-    n_sum_num = sum((1 if is_list else 0) + len(nums)
-                    for _name, is_list, nums, _c in SUMMARY_TABLES)
+def _make_vocab() -> dict:
+    vocab = {'user': {}, 'account': {}}
+    for _f, table in USER_CAT_FIELDS:
+        vocab['user'][table] = {'<UNK>': 0, **{str(v): v for v in range(1, 5)}}
+    for _f, table in ACCOUNT_CAT_FIELDS:
+        vocab['account'][table] = {'<UNK>': 0, **{str(v): v for v in range(1, 5)}}
+    return vocab
+
+
+def _build_cfg(vocab: dict) -> PbcCreditModelConfig:
     return PbcCreditModelConfig(
         d=32, n_heads=4, n_layers=1, dropout=0.0, top_hidden=64,
-        user_numeric_dim=18,
-        user_cat_tables=user_tables,
-        summary_numeric_dim=n_sum_num,
-        summary_cat_tables=summary_tables,
-        account_numeric_dim=15,
-        account_cat_tables=acc_tables,
+        user_numeric_dim=USER_NUMERIC_DIM,
+        user_cat_tables={t: len(vocab['user'][t]) + 1 for _f, t in USER_CAT_FIELDS},
+        account_numeric_dim=ACCOUNT_NUMERIC_DIM,
+        account_cat_tables={t: len(vocab['account'][t]) + 1 for _f, t in ACCOUNT_CAT_FIELDS},
         paystate_vocab_size=PAYSTATE_VOCAB_SIZE,
-        query_numeric_dim=1,
-        query_cat_tables=q_tables,
-        public_type_vocab_size=PUBLIC_TYPE_VOCAB_SIZE,
-        obligation_type_vocab_size=OBLIGATION_TYPE_VOCAB_SIZE,
-        obligation_cat_tables=obl_tables,
     )
 
 
-def _build_samples(files, vocab):
-    out = []
-    for f in files:
-        with open(f) as fp:
-            r = json.load(fp)
-        s = build_sample(r, vocab)
-        encode_sample(s, vocab)
-        out.append(s)
-    return out
+def _write_train_jsonl(path: Path, specs: list[dict[str, int]]):
+    """构造 SQL dump → 过 postprocess → 训练 JSONL（同一契约）。"""
+    with open(path, 'w', encoding='utf-8') as f:
+        for i, counts in enumerate(specs):
+            flat = transform_sample(_make_sql_struct(counts))
+            f.write(json.dumps({
+                'reportsn': f'R{i:04d}',
+                'pbc_struct': json.dumps(flat, ensure_ascii=False),
+            }, ensure_ascii=False) + '\n')
 
 
-@pytest.mark.skipif(not PROD_DIR.exists(), reason='production mock reports missing')
-def test_parse_all_production_reports():
-    """598 份生产 mock 全部能解析。"""
-    vocab = _load_vocab()
-    files = sorted(PROD_DIR.glob('json_*.json'))
-    n_ok = 0
-    n_err = 0
-    for f in files:
-        try:
-            with open(f) as fp:
-                r = json.load(fp)
-            s = build_sample(r, vocab)
-            encode_sample(s, vocab)
-            n_ok += 1
-        except Exception:
-            n_err += 1
-    assert n_err == 0, f'{n_err}/{len(files)} production reports failed to parse'
-    assert n_ok >= 500, f'expected >=500 production reports, got {n_ok}'
+def test_postprocess_transform_contract():
+    """postprocess 输出字段契约：扁平 5 数组 per 类型 + user 3 数组。"""
+    flat = transform_sample(_make_sql_struct({'d1': 2, 'r2': 1}))
+    for key in ('user_numeric', 'user_cat_ids', 'user_cat_mask'):
+        assert key in flat
+    for t in [x.lower() for x in ACCOUNT_TYPES]:
+        assert f'{t}_numeric' in flat
+        assert f'{t}_cat_ids' in flat
+        assert f'{t}_cat_mask' in flat
+        assert f'{t}_paystate' in flat
+        assert f'{t}_mask' in flat
+    assert len(flat['user_numeric']) == USER_NUMERIC_DIM
+    assert len(flat['d1_numeric']) == 2
+    assert len(flat['d1_numeric'][0]) == ACCOUNT_NUMERIC_DIM
+    assert len(flat['d1_paystate'][0]) == PAYSTATE_LEN
+    assert flat['d1_mask'] == [1, 1]
+    assert flat['r3_numeric'] == []  # 空类型 → 空数组（dataset 会 reshape (0, cols)）
 
 
-@pytest.mark.skipif(not DIVERSE_DIR.exists(), reason='diverse reports missing')
-def test_parse_diverse_reports():
-    """多样化报告（13 种扰动）全部能解析。"""
-    vocab = _load_vocab()
-    files = sorted(DIVERSE_DIR.glob('*.json'))
-    if not files:
-        pytest.skip('no diverse reports; run scripts/generate_diverse_reports.py')
-    n_ok = 0
-    n_err = 0
-    errors = []
-    for f in files:
-        try:
-            with open(f) as fp:
-                r = json.load(fp)
-            s = build_sample(r, vocab)
-            encode_sample(s, vocab)
-            n_ok += 1
-        except Exception as e:
-            n_err += 1
-            if len(errors) < 5:
-                errors.append((f.name, type(e).__name__, str(e)[:80]))
-    assert n_err == 0, f'{n_err}/{len(files)} diverse reports failed: {errors}'
+def test_dataset_from_postprocess_output():
+    """postprocess 输出 JSONL → PbcDataset：字段 shape / dtype / report_id。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp) / 'train.jsonl'
+        _write_train_jsonl(p, [{'d1': 2, 'r2': 1}, {}])
+        ds = PbcDataset(p, pretrain_mode=True)
+        assert len(ds) == 2
+        s0, s1 = ds[0], ds[1]
+        assert s0['user_numeric'].shape == (USER_NUMERIC_DIM,)
+        assert s0['d1_numeric'].shape == (2, ACCOUNT_NUMERIC_DIM)
+        assert s0['d1_paystate'].shape == (2, PAYSTATE_LEN)
+        assert s1['d1_numeric'].shape == (0, ACCOUNT_NUMERIC_DIM)  # 空类型 reshape
+        assert s0['report_id'] == 'R0000'
+        # label 模式
+        with open(p, encoding='utf-8') as f:
+            lines = [json.loads(x) for x in f]
+        for i, line in enumerate(lines):
+            line['label'] = i % 2
+        p2 = Path(tmp) / 'train_label.jsonl'
+        with open(p2, 'w', encoding='utf-8') as f:
+            for line in lines:
+                f.write(json.dumps(line, ensure_ascii=False) + '\n')
+        ds2 = PbcDataset(p2, pretrain_mode=False)
+        assert torch.allclose(ds2[0]['target'], torch.tensor([0.0]))
+        assert torch.allclose(ds2[1]['target'], torch.tensor([1.0]))
 
 
-@pytest.mark.skipif(not PROD_DIR.exists(), reason='production mock reports missing')
-def test_e2e_pretrain_on_real_data():
-    """端到端：真实报告 → batch → pretrain forward + backward。"""
-    vocab = _load_vocab()
-    files = sorted(PROD_DIR.glob('json_*.json'))[:4]
-    samples = _build_samples(files, vocab)
+def test_e2e_pretrain_and_finetune():
+    """全链路：JSONL → dataset → collator → pretrain/finetune forward+backward。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp) / 'train.jsonl'
+        _write_train_jsonl(p, [{'d1': 2, 'r2': 3}, {'d1': 1, 'c1': 1}, {}, {'r2': 2}])
+        ds = PbcDataset(p, pretrain_mode=True)
+        samples = list(ds)
+        vocab = _make_vocab()
+        cfg = _build_cfg(vocab)
 
-    cfg = _build_cfg(vocab)
-    model = PbcCreditModel(cfg, pretrain_mode=True)
-    batch = add_masks_to_batch(PbcCollator()(samples), mask_ratio=0.3)
-    out = model(batch)
-    assert any(k.endswith('_pred') for k in out)
-    loss, _ = pretrain_loss(out)
-    loss.backward()
-    assert not torch.isnan(loss)
+        # pretrain
+        model = PbcCreditModel(cfg, pretrain_mode=True)
+        batch = add_masks_to_batch(PbcCollator()(samples), mask_ratio=0.3)
+        out = model(batch)
+        assert any(k.endswith('_pred') for k in out)
+        loss, _ = pretrain_loss(out)
+        loss.backward()
+        assert not torch.isnan(loss)
 
-
-@pytest.mark.skipif(not PROD_DIR.exists(), reason='production mock reports missing')
-def test_e2e_finetune_on_real_data():
-    """端到端：真实报告 → batch → finetune forward + backward。"""
-    vocab = _load_vocab()
-    files = sorted(PROD_DIR.glob('json_*.json'))[:4]
-    samples = _build_samples(files, vocab)
-
-    cfg = _build_cfg(vocab)
-    model = PbcCreditModel(cfg, pretrain_mode=False)
-    batch = PbcCollator()(samples)
-    logits = model(batch)
-    assert logits.shape == (4, 1)
-    target = torch.tensor([0.0, 1.0, 0.0, 1.0])
-    loss = finetune_loss(logits, target, pos_weight=4.0)
-    loss.backward()
-    assert not torch.isnan(loss)
+        # finetune
+        model = PbcCreditModel(cfg, pretrain_mode=False)
+        batch = PbcCollator()(samples)
+        logits = model(batch)
+        assert logits.shape == (4, 1)
+        target = torch.tensor([0.0, 1.0, 0.0, 1.0])
+        loss = finetune_loss(logits, target, pos_weight=4.0)
+        loss.backward()
+        assert not torch.isnan(loss)
 
 
-@pytest.mark.skipif(not DIVERSE_DIR.exists(), reason='diverse reports missing')
-def test_e2e_finetune_on_diverse_data():
-    """端到端：多样化报告 → batch → finetune forward。
+def test_vocab_build_from_sql_dump():
+    """SQL dump JSONL → build_cat_vocab：id 与 SQL ROW_NUMBER 规则一致。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp) / 'dump.jsonl'
+        rows = [
+            {"section": "user", "code_table": "性别代码表", "code_value": "2"},
+            {"section": "user", "code_table": "性别代码表", "code_value": "1"},
+            {"section": "user", "code_table": "性别代码表", "code_value": "1"},  # 去重
+            {"section": "account", "code_table": "机构类型代码", "code_value": "9"},
+            {"section": "account", "code_table": "机构类型代码", "code_value": "1"},
+        ]
+        with open(p, 'w', encoding='utf-8') as f:
+            for r in rows:
+                f.write(json.dumps(r, ensure_ascii=False) + '\n')
+        vocab = build_cat_vocab(str(p))
+        assert vocab['user']['性别代码表'] == {'<UNK>': 0, '1': 1, '2': 2}
+        assert vocab['account']['机构类型代码'] == {'<UNK>': 0, '1': 1, '9': 2}
 
-    覆盖极端情况：heavy_accounts（N=30+）、heavy_queries（N=400+）、
-    drop_summary、drop_publicinfo 等。
-    """
-    vocab = _load_vocab()
-    files = sorted(DIVERSE_DIR.glob('*.json'))[:6]
-    samples = _build_samples(files, vocab)
 
-    cfg = _build_cfg(vocab)
-    model = PbcCreditModel(cfg, pretrain_mode=False)
-    batch = PbcCollator()(samples)
-    logits = model(batch)
-    assert logits.shape == (6, 1)
-    assert not torch.isnan(logits).any()
+def test_postprocess_script_cli():
+    """postprocess_pbc_struct.py CLI 冒烟（pandarallel 并行路径）。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / 'dump.jsonl'
+        out = Path(tmp) / 'train.jsonl'
+        with open(src, 'w', encoding='utf-8') as f:
+            f.write(json.dumps({'reportsn': 'R0001',
+                                'pbc_struct': json.dumps(_make_sql_struct({'d1': 1}),
+                                                         ensure_ascii=False)},
+                               ensure_ascii=False) + '\n')
+        r = subprocess.run(
+            [sys.executable, str(REPO_ROOT / 'scripts' / 'postprocess_pbc_struct.py'),
+             str(src), 'ignored', str(out)],
+            capture_output=True, text=True, timeout=120,
+        )
+        assert r.returncode == 0, r.stderr
+        with open(out, encoding='utf-8') as f:
+            rec = json.loads(f.readline())
+        assert rec['reportsn'] == 'R0001'
+        assert 'd1_paystate' in json.loads(rec['pbc_struct'])
 
 
 if __name__ == '__main__':
-    test_parse_all_production_reports()
-    test_parse_diverse_reports()
-    test_e2e_pretrain_on_real_data()
-    test_e2e_finetune_on_real_data()
-    test_e2e_finetune_on_diverse_data()
+    test_postprocess_transform_contract()
+    test_dataset_from_postprocess_output()
+    test_e2e_pretrain_and_finetune()
+    test_vocab_build_from_sql_dump()
+    test_postprocess_script_cli()
     print('✓ test_pbc_pipeline_e2e passed')

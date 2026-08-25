@@ -1,7 +1,9 @@
-"""PBC masking：对 numeric / paystate / query / public / summary 分支做联合 mask。"""
+"""PBC masking：对 user / accounts（numeric + paystate）分支做联合 mask。"""
 from __future__ import annotations
 
 import torch
+
+from .fields import ACCOUNT_TYPES
 
 
 def _mask_branch(numeric: torch.Tensor, mask: torch.Tensor, mask_ratio: float):
@@ -25,13 +27,22 @@ def _mask_branch(numeric: torch.Tensor, mask: torch.Tensor, mask_ratio: float):
 def add_masks_to_batch(batch: dict, mask_ratio: float = 0.15) -> dict:
     """对 batch 中各分支应用 mask，附加 *_masked_pos 和 *_raw_target 字段。
 
-    重要：mask 后原始值会丢失，所以预先把 target 存到 *_raw_target 字段，
-    _forward_pretrain 必须读 *_raw_target，不能读 batch[f'{x}_numeric']（那是 masked 后的）。
+    重要：mask 后原始值会丢失，所以预先把 target 存到 *_raw 字段，
+    _forward_pretrain 必须读 *_raw，不能读 batch[f'{x}_numeric']（那是 masked 后的）。
     """
     out = dict(batch)
 
-    # accounts numeric + paystate（6 类共享 mask 逻辑）
-    for t in ['d1', 'r1', 'r2', 'r3', 'r4', 'c1']:
+    # user numeric（固定 [B, 18]，按特征位 mask）
+    u_num = batch.get('user_numeric')
+    if u_num is not None:
+        out['user_numeric_raw'] = u_num.clone()
+        rand_u = torch.rand_like(u_num)
+        u_pos = rand_u < mask_ratio
+        out['user_numeric'] = u_num.masked_fill(u_pos, 0.0)
+        out['user_masked_pos'] = u_pos
+
+    # accounts numeric + paystate（6 类共享同一套逻辑）
+    for t in [t.lower() for t in ACCOUNT_TYPES]:
         num = batch.get(f'{t}_numeric')
         mask = batch.get(f'{t}_mask')
         if num is None or mask is None:
@@ -42,7 +53,7 @@ def add_masks_to_batch(batch: dict, mask_ratio: float = 0.15) -> dict:
         out[f'{t}_numeric'] = masked_num
         out[f'{t}_masked_pos'] = pos
 
-        # paystate：独立 mask
+        # paystate：独立 mask（PAD 位 0 不参与）
         pay = batch.get(f'{t}_paystate')
         if pay is not None and pay.shape[1] > 0:
             out[f'{t}_paystate_raw'] = pay.clone()
@@ -51,41 +62,5 @@ def add_masks_to_batch(batch: dict, mask_ratio: float = 0.15) -> dict:
             pos_pay = valid_pay & (rand_pay < mask_ratio)
             out[f'{t}_paystate'] = pay.masked_fill(pos_pay, 0)
             out[f'{t}_paystate_masked_pos'] = pos_pay
-
-    # queries
-    q_num = batch.get('query_numeric')
-    q_mask = batch.get('query_mask')
-    if q_num is not None:
-        out['query_numeric_raw'] = q_num.clone()
-        masked_qn, q_pos = _mask_branch(q_num, q_mask, mask_ratio)
-        out['query_numeric'] = masked_qn
-        out['query_masked_pos'] = q_pos
-
-    # publics
-    p_num = batch.get('public_numeric')
-    p_mask = batch.get('public_mask')
-    if p_num is not None:
-        out['public_numeric_raw'] = p_num.clone()
-        masked_pn, p_pos = _mask_branch(p_num, p_mask, mask_ratio)
-        out['public_numeric'] = masked_pn
-        out['public_masked_pos'] = p_pos
-
-    # obligations
-    o_num = batch.get('obligation_numeric')
-    o_mask = batch.get('obligation_mask')
-    if o_num is not None:
-        out['obligation_numeric_raw'] = o_num.clone()
-        masked_on, o_pos = _mask_branch(o_num, o_mask, mask_ratio)
-        out['obligation_numeric'] = masked_on
-        out['obligation_masked_pos'] = o_pos
-
-    # summary numeric
-    s_num = batch.get('summary_numeric')
-    if s_num is not None:
-        out['summary_numeric_raw'] = s_num.clone()
-        rand_s = torch.rand_like(s_num)
-        s_pos = rand_s < mask_ratio
-        out['summary_numeric'] = s_num.masked_fill(s_pos, 0.0)
-        out['summary_masked_pos'] = s_pos
 
     return out

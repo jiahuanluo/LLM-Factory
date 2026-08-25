@@ -1,8 +1,8 @@
 # PBC 预训练 smoke：少量 step 看 loss + val
 pretrain_samples:
-  - data/pbc/processed/train.jsonl
-val_samples: data/pbc/processed/val.jsonl
-cat_vocab: data/pbc/processed/cat_vocab.json
+  - data/pbc/processed/train_mock.jsonl
+val_samples: data/pbc/processed/val_mock.jsonl
+cat_vocab: data/pbc/processed/cat_vocab_mock.json
 
 # === PbcModelArguments ===
 d: 128
@@ -14,7 +14,7 @@ ema_decay: 0.9   # smoke 阶段较快追踪
 mask_seed: 12345
 
 # === TrainingArguments ===
-output_dir: tmp/pbc_pretrain_smoke
+output_dir: tmp/pbc_pretrain_smoke_mock   # 全新目录，避免旧格式 ckpt 自动恢复
 
 num_train_epochs: 3
 per_device_train_batch_size: 8

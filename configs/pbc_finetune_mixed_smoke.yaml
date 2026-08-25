@@ -1,7 +1,7 @@
 # PBC 微调 mixed smoke：base + diverse 报告混合
 train_samples: data/pbc/processed/train_mixed.jsonl
 val_samples: data/pbc/processed/val_mixed.jsonl
-cat_vocab: data/pbc/processed/cat_vocab.json
+cat_vocab: data/pbc/processed/cat_vocab_prod.json
 
 # === PbcFinetuneModelArguments ===
 d: 128

@@ -1,7 +1,7 @@
 # PBC 微调全量：接 pretrain_full ckpt
 train_samples: data/pbc/processed/train.jsonl
 val_samples: data/pbc/processed/val.jsonl
-cat_vocab: data/pbc/processed/cat_vocab.json
+cat_vocab: data/pbc/processed/cat_vocab_prod.json
 
 # === PbcFinetuneModelArguments ===
 d: 256

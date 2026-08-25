@@ -24,9 +24,8 @@ sys.path.insert(0, str(Path(__file__).parent / 'src'))
 from pbc_credit.collator import PbcCollator
 from pbc_credit.dataset import PbcDataset
 from pbc_credit.fields import (
-    USER_CAT_FIELDS, ACCOUNT_CAT_FIELDS, QUERY_CAT_FIELDS,
-    SUMMARY_TABLES, OBLIGATIONS_CAT_FIELDS,
-    PAYSTATE_VOCAB_SIZE, PUBLIC_TYPE_VOCAB_SIZE, OBLIGATION_TYPE_VOCAB_SIZE,
+    USER_CAT_FIELDS, ACCOUNT_CAT_FIELDS, USER_NUMERIC_DIM, ACCOUNT_NUMERIC_DIM,
+    PAYSTATE_VOCAB_SIZE,
 )
 from pbc_credit.losses import pretrain_loss, EMANormalizer
 from pbc_credit.masking import add_masks_to_batch
@@ -76,30 +75,13 @@ class MaskingCollator:
 
 def build_model_cfg(model_args: PbcModelArguments, vocab: dict) -> PbcCreditModelConfig:
     user_tables = {}
-    for _path, t in USER_CAT_FIELDS:
+    for _field, t in USER_CAT_FIELDS:
         if t:
             user_tables[t] = len(vocab.get('user', {}).get(t, {'<UNK>': 0})) + 1
-    summary_tables = {}
-    for _n, _l, _nf, cats in SUMMARY_TABLES:
-        for _f, t in cats:
-            if t and t not in summary_tables:
-                summary_tables[t] = len(vocab.get('summary', {}).get(t, {'<UNK>': 0})) + 1
     acc_tables = {}
-    for _f, t in ACCOUNT_CAT_FIELDS:
+    for _field, t in ACCOUNT_CAT_FIELDS:
         if t:
             acc_tables[t] = len(vocab.get('account', {}).get(t, {'<UNK>': 0})) + 1
-    q_tables = {}
-    for _f, t in QUERY_CAT_FIELDS:
-        if t:
-            q_tables[t] = len(vocab.get('query', {}).get(t, {'<UNK>': 0})) + 1
-    obl_tables = {}
-    for _ot, _f, t in OBLIGATIONS_CAT_FIELDS:
-        if t and t not in obl_tables:
-            obl_tables[t] = len(vocab.get('obligation', {}).get(t, {'<UNK>': 0})) + 1
-
-    n_sum_num = 0
-    for _name, is_list, nums, _c in SUMMARY_TABLES:
-        n_sum_num += (1 if is_list else 0) + len(nums)
 
     return PbcCreditModelConfig(
         d=model_args.d,
@@ -109,18 +91,11 @@ def build_model_cfg(model_args: PbcModelArguments, vocab: dict) -> PbcCreditMode
         top_n_layers=model_args.top_n_layers,
         top_n_heads=model_args.top_n_heads,
         dropout=model_args.dropout,
-        user_numeric_dim=18,                          # 13 base (含 3 稳定性) + score 5
+        user_numeric_dim=USER_NUMERIC_DIM,               # 18
         user_cat_tables=user_tables,
-        summary_numeric_dim=n_sum_num,
-        summary_cat_tables=summary_tables,
-        account_numeric_dim=15,                       # 8 base + specialTrades 2 + age 1 + 4 ratio
+        account_numeric_dim=ACCOUNT_NUMERIC_DIM,         # 10
         account_cat_tables=acc_tables,
         paystate_vocab_size=PAYSTATE_VOCAB_SIZE,
-        query_numeric_dim=1,
-        query_cat_tables=q_tables,
-        public_type_vocab_size=PUBLIC_TYPE_VOCAB_SIZE,
-        obligation_type_vocab_size=OBLIGATION_TYPE_VOCAB_SIZE,
-        obligation_cat_tables=obl_tables,
     )
 
 
@@ -167,7 +142,7 @@ def evaluate_pretrain(model, val_loader, device, mask_seed: int = 12345) -> dict
 class PbcPreTrainer(Trainer):
     """HF Trainer for PBC pretrain: dict-batch forward + EMA loss normalizer
     + custom eval (per-branch reconstruction loss + paystate perplexity)
-    + P0 B1: contrastive consistency (double-forward, dropout as view augmentation)."""
+    + contrastive consistency (double-forward, dropout as view augmentation)."""
 
     def __init__(self, *args, normalizer: EMANormalizer | None = None,
                  mask_seed: int = 12345, contrastive_weight: float = 0.1, **kwargs):
@@ -182,12 +157,12 @@ class PbcPreTrainer(Trainer):
         loss1, _ = pretrain_loss(outputs1, normalizer=self.normalizer)
 
         # View 2: 同一 inputs 再 forward 一次；dropout 提供随机性作为不同 view
-        # 加 contrastive consistency: 两个 view 的 summary_emb 应趋近
+        # 加 contrastive consistency: 两个 view 的 user_emb 应趋近
         if self.contrastive_weight > 0 and self.model.training:
             outputs2 = model(inputs)
             loss2, _ = pretrain_loss(outputs2, normalizer=self.normalizer)
-            emb1 = outputs1.get('summary_emb')
-            emb2 = outputs2.get('summary_emb')
+            emb1 = outputs1.get('user_emb')
+            emb2 = outputs2.get('user_emb')
             if emb1 is not None and emb2 is not None:
                 # 排除 NaN / 全 0（如全空 batch）
                 if emb1.shape[0] > 0 and emb2.shape[0] > 0:

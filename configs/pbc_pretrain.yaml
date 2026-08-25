@@ -13,9 +13,9 @@ mask_seed: 12345
 
 # === PbcDataArguments ===
 pretrain_samples:
-  - data/pbc/processed/train.jsonl
-val_samples: data/pbc/processed/val.jsonl
-cat_vocab: data/pbc/processed/cat_vocab.json
+  - data/pbc/processed/train_mock.jsonl
+val_samples: data/pbc/processed/val_mock.jsonl
+cat_vocab: data/pbc/processed/cat_vocab_mock.json
 
 # === TrainingArguments ===
 output_dir: output/pbc_pretrained

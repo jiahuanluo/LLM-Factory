@@ -1,14 +1,14 @@
 # PBC 微调 smoke：从 pretrain ckpt 接着训
-train_samples: data/pbc/processed/train.jsonl
-val_samples: data/pbc/processed/val.jsonl
-cat_vocab: data/pbc/processed/cat_vocab.json
+train_samples: data/pbc/processed/train_mock.jsonl
+val_samples: data/pbc/processed/val_mock.jsonl
+cat_vocab: data/pbc/processed/cat_vocab_mock.json
 
 # === PbcFinetuneModelArguments ===
 d: 128
 n_heads: 4
 n_layers: 2
 dropout: 0.1
-init_from_pretrain: tmp/pbc_pretrain_smoke/encoder_state.pt
+init_from_pretrain: tmp/pbc_pretrain_smoke_mock/encoder_state.pt
 pos_weight: 4.0
 
 # === TrainingArguments ===
