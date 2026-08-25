@@ -4,10 +4,11 @@
 （不 import convert_mock_to_pbc_struct / src）。
 
 数据源：erm_mx_data_work.nluv4_pbcg2_content_merged（生产已合并单表，无需 join）：
-  busi_sno | reportsn | content（完整报文 JSON）| cert_no_mask
+  busi_sno | reportsn | content（完整报文 JSON）| cert_no_mask | ds（日分区）
+  表大（800w+ 份）→ 按 ds 月份分批（DS_START~DS_END），每月 cache→处理→unpersist
   生产报文内的出生日期/地址是哈希值，户籍省/市与出生日期改从 cert_no_mask 提取
   （A 格式 18 位、前 14 位明文：1-6 位行政区划码[1-2 省/1-4 市]、7-14 位出生日期）
-输出表：erm_mx_data_work.marm_pbcg2_pbcstruct_v1_ds
+输出表：erm_mx_data_work.marm_pbcg2_pbcstruct_v1_ds（按月分区，ds=每月 1 号）
   busi_sno | reportsn | pbc_struct | is_val | ds
   - pbc_struct：PbcDataset 最终格式（user 32 numeric + 14 cat + 6 类账户
     13 numeric/13 cat/60 paystate，含 log1p 归一化 + 19 个 report 级聚合），离线**零处理**直接给模型
@@ -15,10 +16,10 @@
   - 失败行保留 {"_error":...}，导出时过滤即可
 
 转换后离线只剩导出 + 训练：
-  SELECT reportsn, pbc_struct FROM <表> WHERE ds='<ds>' AND NOT is_val
-    AND pbc_struct NOT LIKE '{"_error%'   → train_prod.jsonl
-  SELECT ... AND is_val AND ...            → val_prod.jsonl
-  # cat_vocab_prod_<ds>.json（本脚本落盘）拷到 processed 目录供 run_pbc_pretrain 用
+  SELECT reportsn, pbc_struct FROM <表> WHERE ds BETWEEN '<首月>01' AND '<末月>01'
+    AND NOT is_val AND pbc_struct NOT LIKE '{"_error%'   → train_prod.jsonl
+  SELECT ... AND is_val AND ...                            → val_prod.jsonl
+  # cat_vocab_prod.json（本脚本落盘，全周期一份）拷到 processed 目录供 run_pbc_pretrain 用
   python run_pbc_pretrain.py configs/pbc_pretrain.yaml
 
 vocab 两遍扫描：pass1 集群内 distinct 码值 → driver 建 vocab（0=UNK，1..N 字典序，
@@ -28,10 +29,13 @@ vocab 两遍扫描：pass1 集群内 distinct 码值 → driver 建 vocab（0=UN
    （语义逐位一致，已交叉验证）——改 fields.py/转换器后必须同步这里并重跑
    spark_convert_pbc_struct.py --local-test。
 
-用法（集群/notebook，spark 已就绪）：改 RUN_DATE 后执行 run_spark()
+用法（集群/notebook，spark 已就绪）：改 DS_START/DS_END 后执行 run_spark()
+  （按月循环：pass1 逐月收集码值取并集建全局 vocab → pass2 逐月转换写月分区；
+  vocab 与一次性全量跑完全等价，失败可单月重跑不吞其它月）
 本地自检（无 pyspark 依赖）：
   python scripts/spark_convert_pbc_struct.py --local-test <某份报文.json>
 """
+import calendar
 import json
 import math
 import sys
@@ -356,36 +360,59 @@ def parse_report_to_struct_json(report_json_str: str, vocab: dict, cert_mask='')
 # Spark driver（集群上执行；本地自检走 --local-test）
 # ============================================================
 
-RUN_DATE = '20260811'            # ← 输出写入的分区日期（输入表无 ds），按需修改
 # 输入单表：content（完整报文 JSON）与 cert_no_mask（出生日期/户籍地区，报文内是哈希）
-# 已在生产合并好，无需再 join 拆分表
+# 已在生产合并好，无需再 join 拆分表。表大（800w+ 份）→ 按 ds 月份分批：
+# 每月单独 cache、处理完 unpersist（内存只保留当月），失败可单月重跑（幂等）
 SRC_TABLE = 'erm_mx_data_work.nluv4_pbcg2_content_merged'
-DST_TABLE = 'erm_mx_data_work.marm_pbcg2_pbcstruct_v1_ds'
+DS_START = '20230101'            # ← 输入 ds 范围（含）
+DS_END = '20260823'              # ← 输入 ds 范围（含）
+DST_TABLE = 'erm_mx_data_work.marm_pbcg2_pbcstruct_v1_ds'   # 输出按月分区（ds=每月 1 号）
 # 首次运行前需建表：
 # CREATE TABLE IF NOT EXISTS erm_mx_data_work.marm_pbcg2_pbcstruct_v1_ds (
 #   busi_sno string, reportsn string, pbc_struct string, is_val boolean
 # ) PARTITIONED BY (ds string) STORED AS ORC;
 
 
+def _months():
+    """DS_START~DS_END 覆盖的月份列表 [(2023, 1), (2023, 2), ...]（driver 端）。"""
+    y, m = int(DS_START[:4]), int(DS_START[4:6])
+    ey, em = int(DS_END[:4]), int(DS_END[4:6])
+    out = []
+    while (y, m) <= (ey, em):
+        out.append((y, m))
+        m += 1
+        if m == 13:
+            y, m = y + 1, 1
+    return out
+
+
+def _month_pred(y, m):
+    """月内 ds 范围谓词（字符串区间比较，保证分区裁剪），并夹在 DS_START~DS_END 内。"""
+    lo = max('%04d%02d01' % (y, m), DS_START)
+    hi = min('%04d%02d%02d' % (y, m, calendar.monthrange(y, m)[1]), DS_END)
+    return "ds >= '%s' and ds <= '%s'" % (lo, hi)
+
+
 def run_spark():
     from pyspark.sql.functions import col, explode, udf
     from pyspark.sql.types import ArrayType, BooleanType, StringType
 
-    # 输入即生产合并单表（content + cert_no_mask 同行），无需 join；ds 用输出分区日期字面量
-    str_sql = f'''select
-        busi_sno, reportsn, content, cert_no_mask, '{RUN_DATE}' as ds
-    from {SRC_TABLE}
-    where content is not null and reportsn is not null'''
+    months = _months()
+    print(f'=== 输入 {SRC_TABLE}: ds {DS_START}~{DS_END}，按月分批 {len(months)} 个月 ===')
+    print('    每月单独 cache → 处理 → unpersist（集群内存只保留当月）；'
+          'vocab 先逐月收集合并为全局再转换（UNK=0 与一次性全量跑完全一致）')
+
+    def load_month(y, m):
+        sql = '''select
+            busi_sno, reportsn, content, cert_no_mask, '%04d%02d01' as ds
+        from %s
+        where %s
+          and content is not null and reportsn is not null''' % (y, m, SRC_TABLE, _month_pred(y, m))
+        return spark.sql(sql).cache()
 
     spark.sql('set spark.executor.memory=50g')
     spark.sql('set hive.exec.dynamic.partition.mode=nostrict')
-    df = spark.sql(str_sql).cache()
-    n_input = df.count()
-    n_cert = df.where(col('cert_no_mask').isNotNull()).count()
-    print(f'=== pass0 输入报文: {n_input:,} 条（{SRC_TABLE}，cert_no_mask 非空 {n_cert:,}，'
-          f'写入 ds={RUN_DATE}）===')
 
-    # ---- pass 1：集群内 distinct 收码值 → driver 建 vocab ----
     @udf(ArrayType(StringType()))
     def collect_vocab_udf(s, c):
         try:
@@ -393,20 +420,34 @@ def run_spark():
         except Exception:
             return []
 
-    pairs = (df.select(explode(collect_vocab_udf(df['content'], df['cert_no_mask'])).alias('kv'))
-               .distinct().collect())
-    vocab = build_vocab_from_pairs([row['kv'] for row in pairs])
+    # ---- pass 1：逐月 distinct 码值 → driver 取并集 → 全局 vocab ----
+    pair_sets = set()
+    n_input = n_cert = 0
+    for y, m in months:
+        df = load_month(y, m)
+        n = df.count()
+        nc = df.where(col('cert_no_mask').isNotNull()).count()
+        rows = (df.select(explode(collect_vocab_udf(df['content'], df['cert_no_mask'])).alias('kv'))
+                  .distinct().collect())
+        pair_sets.update(r['kv'] for r in rows)
+        n_input += n
+        n_cert += nc
+        df.unpersist()
+        print('pass1 %04d-%02d: %s 条（累计 %s，cert_no_mask 非空 %s，码值组合 %s）'
+              % (y, m, format(n, ','), format(n_input, ','), format(n_cert, ','),
+                 format(len(pair_sets), ',')))
+    vocab = build_vocab_from_pairs(sorted(pair_sets))
     n_values = sum(len(t) - 1 for s in vocab.values() for t in s.values())
-    print(f'=== pass1 vocab: user {len(vocab["user"])} 表 + account {len(vocab["account"])} 表'
+    print(f'=== pass1 全局 vocab: user {len(vocab["user"])} 表 + account {len(vocab["account"])} 表'
           f'（{n_values:,} 个码值）===')
     try:  # vocab 落盘（driver 本地）：run_pbc_pretrain 需要 + 混训并集用
-        with open(f'cat_vocab_prod_{RUN_DATE}.json', 'w', encoding='utf-8') as f:
+        with open('cat_vocab_prod.json', 'w', encoding='utf-8') as f:
             json.dump(vocab, f, ensure_ascii=False, indent=2)
-        print(f'=== vocab 已落盘: cat_vocab_prod_{RUN_DATE}.json（随 notebook 工作目录）===')
+        print('=== vocab 已落盘: cat_vocab_prod.json（随 notebook 工作目录）===')
     except OSError as e:
         print(f'warn: vocab 落盘失败（不影响转换）: {e}')
 
-    # ---- pass 2：broadcast vocab → 转换 + is_val 切分列 ----
+    # ---- pass 2：逐月转换（broadcast 全局 vocab）→ 各写各的月分区（幂等，可单月重跑）----
     vocab_bc = spark.sparkContext.broadcast(vocab)
 
     @udf(StringType())
@@ -417,16 +458,22 @@ def run_spark():
     def is_val_udf(rid):
         return bool(rid) and int(md5(_s(rid).encode()).hexdigest(), 16) % 10 == 0
 
-    out = (df.withColumn('pbc_struct', to_struct_udf(df['content'], df['cert_no_mask']))
-             .withColumn('is_val', is_val_udf(df['reportsn']))
-             .drop('content').drop('cert_no_mask'))
-    n_err = out.where(col('pbc_struct').like('{"_error%')).count()
-    n_val = out.where(col('is_val') & ~col('pbc_struct').like('{"_error%')).count()
-    print(f'=== pass2 转换完成: ok {n_input - n_err:,}（val {n_val:,} / train {n_input - n_err - n_val:,}）'
-          f' | 失败 {n_err:,}（保留 _error 行便于排查）===')
-
-    out[['busi_sno', 'reportsn', 'pbc_struct', 'is_val', 'ds']].write.mode('overwrite').insertInto(DST_TABLE)
-    print(f'=== 已写入 {DST_TABLE}（ds={RUN_DATE}）===')
+    n_err = n_val = 0
+    for y, m in months:
+        df = load_month(y, m)
+        out = (df.withColumn('pbc_struct', to_struct_udf(df['content'], df['cert_no_mask']))
+                 .withColumn('is_val', is_val_udf(df['reportsn']))
+                 .drop('content').drop('cert_no_mask'))
+        e = out.where(col('pbc_struct').like('{"_error%')).count()
+        v = out.where(col('is_val') & ~col('pbc_struct').like('{"_error%')).count()
+        out[['busi_sno', 'reportsn', 'pbc_struct', 'is_val', 'ds']].write.mode('overwrite').insertInto(DST_TABLE)
+        n_err += e
+        n_val += v
+        df.unpersist()
+        print('pass2 %04d-%02d: 失败 %s / val %s → 已写 %s ds=%04d%02d01'
+              % (y, m, format(e, ','), format(v, ','), DST_TABLE, y, m))
+    print(f'=== 全部完成: 共 {n_input:,} 条，失败 {n_err:,}（保留 _error 行便于排查），'
+          f'val {n_val:,} / train {n_input - n_err - n_val:,} ===')
 
 
 def local_test(path: str) -> int:

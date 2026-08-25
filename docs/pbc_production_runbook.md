@@ -17,10 +17,17 @@ spark-submit 直接跑，不依赖仓库其它文件。与离线转换器语义�
 含 cat_ids；镜像同步要求见文件头注释）。
 
 **输入单表**：`erm_mx_data_work.nluv4_pbcg2_content_merged`（busi_sno, reportsn,
-content, cert_no_mask 已在生产合并，**无需 join**）。生产报文内的出生日期/地址是
+content, cert_no_mask, ds 已在生产合并，**无需 join**）。生产报文内的出生日期/地址是
 哈希值：cert_no_mask（A 格式 18 位、前 14 位明文）1-6 位行政区划码 → cert_prov
 （1-2 位）/cert_city（1-4 位）两个 cat 特征，7-14 位 → 出生日期（age_years 来源）。
-cert_no_mask 为空的行走报文字段兜底（cert 特征 mask=0）。pass0 会打印 cert 非空数。
+cert_no_mask 为空的行走报文字段兜底（cert 特征 mask=0）。
+
+**按月分批**（800w 份全量 cache 撑不住）：脚本按 `DS_START`~`DS_END` 的 ds 月份
+循环，每月 `cache → 处理 → unpersist`，集群内存只保留当月；pass1 逐月收集码值在
+driver 取**并集**建全局 vocab（distinct 并集 == 全表 distinct，与一次性全量跑完全
+等价，UNK=0 不受影响）；pass2 用这份全局 vocab 逐月转换，各写各的**月分区**
+（ds=每月 1 号，`mode('overwrite')` 单月粒度幂等——哪个月失败重跑哪个月，不吞已
+完成的月份）。is_val 按 reportsn 哈希，与分批无关。
 
 1. **首次先建表**（脚本头部有 DDL）：
    ```sql
@@ -28,22 +35,24 @@ cert_no_mask 为空的行走报文字段兜底（cert 特征 mask=0）。pass0 �
      (busi_sno string, reportsn string, pbc_struct string, is_val boolean)
    PARTITIONED BY (ds string) STORED AS ORC;
    ```
-2. 粘贴整份脚本，改 `RUN_DATE`（输出分区日期），执行 `run_spark()`：
-   - pass0 打印输入报文数 + cert_no_mask 非空数（读 `SRC_TABLE` 全表，写入 ds=RUN_DATE 分区）
-   - pass1 集群内 distinct 码值（含 cert_prov/cert_city）→ 建 vocab（保证 UNK=0）
-     → 落盘 `cat_vocab_prod_<ds>.json`
-   - pass2 broadcast vocab → UDF 转换 + **`is_val` 切分列**（md5(reportsn)%10==0）→ 写表；
-     **失败行保留 `{"_error":...}` 不拖死 job**；结尾打印 ok/val/train/失败 计数
-3. **预期输出**：表行数 = 输入报文数（ok 率应 >99.9%）；`pbc_struct` 列即 PbcDataset
-   最终格式（user 32 numeric + 14 cat + 6 类账户 13/13/60，含 log1p + 19 聚合），离线**零处理**
+2. 粘贴整份脚本，改 `DS_START`/`DS_END`，执行 `run_spark()`：
+   - pass1 逐月：打印每月条数 + cert_no_mask 非空累计 + 码值组合累计；跑完落盘
+     全局 `cat_vocab_prod.json`（全周期一份，保证 UNK=0）
+   - pass2 逐月：broadcast 全局 vocab → UDF 转换 + **`is_val` 切分列**
+     （md5(reportsn)%10==0）→ 写月分区；**失败行保留 `{"_error":...}` 不拖死 job**；
+     每月打印 失败/val 计数，结尾打印总计
+3. **预期输出**：各月分区行数合计 = 输入报文数（ok 率应 >99.9%）；`pbc_struct` 列即
+   PbcDataset 最终格式（user 32 numeric + 14 cat + 6 类账户 13/13/60，含 log1p + 19 聚合），离线**零处理**
 4. **离线取数 → 训练**（两条 SQL 导出即训练文件，无需任何本地转换/切分）：
    ```sql
    SELECT reportsn, pbc_struct FROM erm_mx_data_work.marm_pbcg2_pbcstruct_v1_ds
-   WHERE ds='<RUN_DATE>' AND NOT is_val AND pbc_struct NOT LIKE '{"_error%'   -- → train_prod.jsonl
+   WHERE ds BETWEEN '20230101' AND '20260801' AND NOT is_val
+     AND pbc_struct NOT LIKE '{"_error%'   -- → train_prod.jsonl
    SELECT reportsn, pbc_struct FROM erm_mx_data_work.marm_pbcg2_pbcstruct_v1_ds
-   WHERE ds='<RUN_DATE>' AND is_val AND pbc_struct NOT LIKE '{"_error%'       -- → val_prod.jsonl
+   WHERE ds BETWEEN '20230101' AND '20260801' AND is_val
+     AND pbc_struct NOT LIKE '{"_error%'   -- → val_prod.jsonl
    ```
-   把 Spark 落盘的 `cat_vocab_prod_<ds>.json` 拷到 processed 目录，config 指向三件即可训练。
+   把 Spark 落盘的 `cat_vocab_prod.json` 拷到 processed 目录，config 指向三件即可训练。
    （可选：需要本地统计报告时用 `convert_mock_to_pbc_struct.py --from-dump`，见其 docstring）
 5. **混训注意**：Spark 版 vocab 是本次语料的 id 空间，与 `cat_vocab_mock.json` 不同；
    混训前取两者并集、两侧重编码（pass1 落盘的 json 就是为这一步准备的）
