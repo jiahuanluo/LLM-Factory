@@ -38,6 +38,10 @@ driver 取**并集**建全局 vocab（distinct 并集 == 全表 distinct，与�
 2. 粘贴整份脚本，改 `DS_START`/`DS_END`，执行 `run_spark()`：
    - pass1 逐月：打印每月条数 + cert_no_mask 非空累计 + 码值组合累计；跑完落盘
      全局 `cat_vocab_prod.json`（全周期一份，保证 UNK=0）
+   - ⚠ vocab 落盘在 **driver 本地文件** `VOCAB_OUT`（默认相对路径 = notebook 工作目录，
+     **不在 HDFS、不在结果表里**）——跑完立刻拷到 processed/ 另存一份；丢了不要慌：
+     改 `VOCAB_OUT` 为绝对路径后执行 `rebuild_vocab_only()`，只重跑 pass1 重建
+     （同 DS 范围结果与当时逐位一致；若期间输入新增了码值，id 空间已变，月分区需重转）
    - pass2 逐月：broadcast 全局 vocab → UDF 转换 + **`is_val` 切分列**
      （md5(reportsn)%10==0）→ 写月分区；**失败行保留 `{"_error":...}` 不拖死 job**；
      每月打印 失败/val 计数，结尾打印总计

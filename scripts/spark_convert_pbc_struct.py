@@ -32,12 +32,15 @@ vocab 两遍扫描：pass1 集群内 distinct 码值 → driver 建 vocab（0=UN
 用法（集群/notebook，spark 已就绪）：改 DS_START/DS_END 后执行 run_spark()
   （按月循环：pass1 逐月收集码值取并集建全局 vocab → pass2 逐月转换写月分区；
   vocab 与一次性全量跑完全等价，失败可单月重跑不吞其它月）
+  vocab 落盘在 VOCAB_OUT（driver 本地文件，不在 HDFS）——文件丢了/想换路径：
+  改 VOCAB_OUT 后执行 rebuild_vocab_only()，只重跑 pass1 重建（同 DS 范围逐位一致）
 本地自检（无 pyspark 依赖）：
   python scripts/spark_convert_pbc_struct.py --local-test <某份报文.json>
 """
 import calendar
 import json
 import math
+import os
 import sys
 from datetime import date
 from hashlib import md5
@@ -367,6 +370,9 @@ SRC_TABLE = 'erm_mx_data_work.nluv4_pbcg2_content_merged'
 DS_START = '20230101'            # ← 输入 ds 范围（含）
 DS_END = '20260823'              # ← 输入 ds 范围（含）
 DST_TABLE = 'erm_mx_data_work.marm_pbcg2_pbcstruct_v1_ds'   # 输出按月分区（ds=每月 1 号）
+# vocab 落盘路径（driver 本地文件，不在 HDFS）。相对路径 = notebook/spark-submit 的
+# 工作目录，会话清理可能丢——建议改成绝对路径；丢了用 rebuild_vocab_only() 重建
+VOCAB_OUT = 'cat_vocab_prod.json'
 # 首次运行前需建表：
 # CREATE TABLE IF NOT EXISTS erm_mx_data_work.marm_pbcg2_pbcstruct_v1_ds (
 #   busi_sno string, reportsn string, pbc_struct string, is_val boolean
@@ -393,25 +399,18 @@ def _month_pred(y, m):
     return "ds >= '%s' and ds <= '%s'" % (lo, hi)
 
 
-def run_spark():
-    from pyspark.sql.functions import col, explode, udf
-    from pyspark.sql.types import ArrayType, BooleanType, StringType
+def _load_month(y, m):
+    sql = '''select
+        busi_sno, reportsn, content, cert_no_mask, '%04d%02d01' as ds
+    from %s
+    where %s
+      and content is not null and reportsn is not null''' % (y, m, SRC_TABLE, _month_pred(y, m))
+    return spark.sql(sql).cache()
 
-    months = _months()
-    print(f'=== 输入 {SRC_TABLE}: ds {DS_START}~{DS_END}，按月分批 {len(months)} 个月 ===')
-    print('    每月单独 cache → 处理 → unpersist（集群内存只保留当月）；'
-          'vocab 先逐月收集合并为全局再转换（UNK=0 与一次性全量跑完全一致）')
 
-    def load_month(y, m):
-        sql = '''select
-            busi_sno, reportsn, content, cert_no_mask, '%04d%02d01' as ds
-        from %s
-        where %s
-          and content is not null and reportsn is not null''' % (y, m, SRC_TABLE, _month_pred(y, m))
-        return spark.sql(sql).cache()
-
-    spark.sql('set spark.executor.memory=50g')
-    spark.sql('set hive.exec.dynamic.partition.mode=nostrict')
+def _collect_vocab_udf():
+    from pyspark.sql.functions import udf
+    from pyspark.sql.types import ArrayType, StringType
 
     @udf(ArrayType(StringType()))
     def collect_vocab_udf(s, c):
@@ -419,12 +418,17 @@ def run_spark():
             return collect_vocab_values(json.loads(s), c)
         except Exception:
             return []
+    return collect_vocab_udf
 
-    # ---- pass 1：逐月 distinct 码值 → driver 取并集 → 全局 vocab ----
+
+def _pass1_collect(months):
+    """逐月 distinct 码值 → driver 取并集（与全量一次性 distinct 等价）。"""
+    from pyspark.sql.functions import col, explode
+    collect_vocab_udf = _collect_vocab_udf()
     pair_sets = set()
     n_input = n_cert = 0
     for y, m in months:
-        df = load_month(y, m)
+        df = _load_month(y, m)
         n = df.count()
         nc = df.where(col('cert_no_mask').isNotNull()).count()
         rows = (df.select(explode(collect_vocab_udf(df['content'], df['cert_no_mask'])).alias('kv'))
@@ -436,16 +440,56 @@ def run_spark():
         print('pass1 %04d-%02d: %s 条（累计 %s，cert_no_mask 非空 %s，码值组合 %s）'
               % (y, m, format(n, ','), format(n_input, ','), format(n_cert, ','),
                  format(len(pair_sets), ',')))
+    return pair_sets, n_input, n_cert
+
+
+def _save_vocab(vocab):
+    """vocab 落盘到 VOCAB_OUT（driver 本地）。run_pbc_pretrain 需要 + 混训并集用。"""
+    try:
+        with open(VOCAB_OUT, 'w', encoding='utf-8') as f:
+            json.dump(vocab, f, ensure_ascii=False, indent=2)
+        print('=== vocab 已落盘: %s（拷到 processed/ 训练用；建议另存一份防丢）===' % os.path.abspath(VOCAB_OUT))
+    except OSError as e:
+        print('warn: vocab 落盘失败（不影响转换）: %s' % e)
+
+
+def _build_global_vocab(months):
+    pair_sets, n_input, n_cert = _pass1_collect(months)
     vocab = build_vocab_from_pairs(sorted(pair_sets))
     n_values = sum(len(t) - 1 for s in vocab.values() for t in s.values())
-    print(f'=== pass1 全局 vocab: user {len(vocab["user"])} 表 + account {len(vocab["account"])} 表'
-          f'（{n_values:,} 个码值）===')
-    try:  # vocab 落盘（driver 本地）：run_pbc_pretrain 需要 + 混训并集用
-        with open('cat_vocab_prod.json', 'w', encoding='utf-8') as f:
-            json.dump(vocab, f, ensure_ascii=False, indent=2)
-        print('=== vocab 已落盘: cat_vocab_prod.json（随 notebook 工作目录）===')
-    except OSError as e:
-        print(f'warn: vocab 落盘失败（不影响转换）: {e}')
+    print(f'=== 全局 vocab: user {len(vocab["user"])} 表 + account {len(vocab["account"])} 表'
+          f'（{n_values:,} 个码值），覆盖 {n_input:,} 条报文（cert_no_mask 非空 {n_cert:,}）===')
+    return vocab
+
+
+def rebuild_vocab_only():
+    """只重跑 pass1 重建全局 vocab（不转换、不写表）——vocab 文件丢失/换路径保存时用。
+
+    同 DS 范围下重建结果与当时逐位一致（id = 0=UNK + 字典序，只依赖 distinct 值集合）；
+    若期间输入有新增码值，id 空间会变，已写分区需整批重转。
+    """
+    spark.sql('set spark.executor.memory=50g')
+    months = _months()
+    print(f'=== rebuild vocab: {SRC_TABLE} ds {DS_START}~{DS_END}'
+          f'（{len(months)} 个月，只收集不转换）===')
+    _save_vocab(_build_global_vocab(months))
+
+
+def run_spark():
+    from pyspark.sql.functions import col, udf
+    from pyspark.sql.types import BooleanType, StringType
+
+    months = _months()
+    print(f'=== 输入 {SRC_TABLE}: ds {DS_START}~{DS_END}，按月分批 {len(months)} 个月 ===')
+    print('    每月单独 cache → 处理 → unpersist（集群内存只保留当月）；'
+          'vocab 先逐月收集合并为全局再转换（UNK=0 与一次性全量跑完全一致）')
+
+    spark.sql('set spark.executor.memory=50g')
+    spark.sql('set hive.exec.dynamic.partition.mode=nostrict')
+
+    # ---- pass 1：全局 vocab ----
+    vocab = _build_global_vocab(months)
+    _save_vocab(vocab)
 
     # ---- pass 2：逐月转换（broadcast 全局 vocab）→ 各写各的月分区（幂等，可单月重跑）----
     vocab_bc = spark.sparkContext.broadcast(vocab)
@@ -460,7 +504,7 @@ def run_spark():
 
     n_err = n_val = 0
     for y, m in months:
-        df = load_month(y, m)
+        df = _load_month(y, m)
         out = (df.withColumn('pbc_struct', to_struct_udf(df['content'], df['cert_no_mask']))
                  .withColumn('is_val', is_val_udf(df['reportsn']))
                  .drop('content').drop('cert_no_mask'))
