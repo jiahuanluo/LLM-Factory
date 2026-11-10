@@ -143,9 +143,3 @@ class NewConfig(PretrainedConfig):
         self.use_memory_efficient_attention = use_memory_efficient_attention
         self.logn_attention_scale = logn_attention_scale
         self.logn_attention_clip1 = logn_attention_clip1
-
-        # GQA, pooling, matryoshka
-        self.num_kv_heads = kwargs.pop('num_kv_heads', None)
-        self.pooling_type = kwargs.pop('pooling_type', 'mean')
-        self.num_latents = kwargs.pop('num_latents', 1)
-        self.matryoshka_dims = kwargs.pop('matryoshka_dims', None)
