@@ -85,7 +85,7 @@ class DataTrainingArguments:
     dataset_config_name: str | None = field(
         default=None, metadata={"help": "The configuration name of the dataset to use (via the datasets library)."}
     )
-    do_regression: bool = field(
+    do_regression: bool | None = field(
         default=None,
         metadata={
             "help": "Whether to do regression instead of classification. If None, will be inferred from the dataset."
@@ -373,6 +373,9 @@ def main():
     # for the actual text value.
     # In distributed training, the load_dataset function guarantee that only one local process can concurrently
     # download the dataset.
+    # 先给默认值：hub 数据集路径不走本地文件的 predict-only 判定，
+    # 否则 --dataset_name 运行时下方 `if predict_only` 会 NameError
+    predict_only = False
     if data_args.dataset_name is not None:
         # Downloading and loading a dataset from the hub.
         raw_datasets = load_dataset(
@@ -471,6 +474,10 @@ def main():
 
     if data_args.remove_splits is not None:
         for split in data_args.remove_splits.split(","):
+            if split not in raw_datasets:
+                raise ValueError(
+                    f"remove_splits 指定的 split '{split}' 不存在，可用 split: {list(raw_datasets.keys())}"
+                )
             logger.info(f"removing split {split}")
             raw_datasets.pop(split)
 
@@ -627,7 +634,7 @@ def main():
     )
 
     # Check UNK token ratio on a random sample before training
-    def check_unk_ratio(tokenizer, dataset, text_column, num_samples=100, threshold=0.1, max_length=512):
+    def check_unk_ratio(tokenizer, dataset, text_column, num_samples=100, threshold=0.1, max_length=512, split_name=None):
         import random
         unk_id = tokenizer.unk_token_id
         if unk_id is None:
@@ -635,7 +642,7 @@ def main():
         n = min(num_samples, len(dataset))
         indices = random.sample(range(len(dataset)), n)
         samples = [dataset[i][text_column] for i in indices]
-        samples = [s for s in samples if s and not s.isspace()]
+        samples = [s for s in samples if isinstance(s, str) and s and not s.isspace()]
         if not samples:
             return
         encodings = tokenizer(samples, truncation=True, max_length=max_length, return_attention_mask=False)
@@ -645,11 +652,11 @@ def main():
             total_tokens += len(ids)
             unk_tokens += ids.count(unk_id)
         ratio = unk_tokens / total_tokens if total_tokens > 0 else 0
-        logger.info(f"UNK token 检查: 采样 {len(samples)} 条, 总 token {total_tokens}, UNK {unk_tokens}, 占比 {ratio:.2%}")
+        logger.info(f"UNK token 检查[{split_name or 'dataset'}]: 采样 {len(samples)} 条, 总 token {total_tokens}, UNK {unk_tokens}, 占比 {ratio:.2%}")
         if ratio > threshold:
             raise ValueError(
-                f"UNK token 占比 {ratio:.2%} 超过阈值 {threshold:.0%}，"
-                f"请检查 tokenizer 是否与训练数据匹配（语言、词表等）"
+                f"UNK token 占比 {ratio:.2%} 超过阈值 {threshold:.0%}（split: {split_name or '未知'}），"
+                f"请检查 tokenizer 是否与该 split 的数据匹配（语言、词表等）"
             )
 
     if model_args.model_name_or_path:
@@ -749,14 +756,19 @@ def main():
 
     # UNK token 检查：放在 .map() 之后，避免 check_unk_ratio 内部调用 tokenizer 修改
     # 其状态、进而导致 preprocess_function closure 跨 rank pickle 不一致。
-    if training_args.do_train and training_args.local_rank in [-1, 0]:
-        if data_args.text_column_names is not None:
-            _check_text_col = data_args.text_column_names.split(",")[0]
-        else:
-            _features = list(raw_datasets["train"].features)
-            _check_text_col = "sentence" if "sentence" in _features else _features[0]
-        check_unk_ratio(tokenizer, raw_datasets["train"], _check_text_col,
-                        max_length=data_args.max_seq_length or 512)
+    # 检查 raw_datasets 里的所有 split，任一超阈值即终止。
+    if training_args.local_rank in [-1, 0]:
+        _check_splits = list(raw_datasets.keys())
+        if _check_splits:
+            if data_args.text_column_names is not None:
+                _check_text_col = data_args.text_column_names.split(",")[0]
+            else:
+                _features = list(raw_datasets[_check_splits[0]].features)
+                _check_text_col = "sentence" if "sentence" in _features else _features[0]
+            for _split in _check_splits:
+                check_unk_ratio(tokenizer, raw_datasets[_split], _check_text_col,
+                                max_length=data_args.max_seq_length or 512,
+                                split_name=_split)
 
     if training_args.do_train:
         if "train" not in raw_datasets:
@@ -781,15 +793,15 @@ def main():
                 eval_dict[key] = ds
 
         if len(eval_dict) == 0:
-            # Fallback to test set
-            if "test" not in raw_datasets and "test_matched" not in raw_datasets:
+            # Fallback to test set（兼容 hub 数据集的 test_matched 命名）
+            _test_key = next((k for k in ("test", "test_matched") if k in raw_datasets), None)
+            if _test_key is None:
                 raise ValueError("--do_eval requires a validation or test dataset if validation is not defined.")
-            else:
-                logger.warning("Validation dataset not found. Falling back to test dataset for validation.")
-                eval_dataset = raw_datasets["test"]
-                if data_args.max_eval_samples is not None:
-                    max_eval_samples = min(len(eval_dataset), data_args.max_eval_samples)
-                    eval_dataset = eval_dataset.select(range(max_eval_samples))
+            logger.warning("Validation dataset not found. Falling back to test dataset for validation.")
+            eval_dataset = raw_datasets[_test_key]
+            if data_args.max_eval_samples is not None:
+                max_eval_samples = min(len(eval_dataset), data_args.max_eval_samples)
+                eval_dataset = eval_dataset.select(range(max_eval_samples))
         elif len(eval_dict) == 1:
             # Single validation: use the dataset directly for backward compatibility
             eval_dataset = list(eval_dict.values())[0]
@@ -849,7 +861,7 @@ def main():
             preds = np.squeeze(preds)
             return {"mse": mean_squared_error(p.label_ids, preds)}
         elif is_multi_label:
-            preds = np.array([np.where(p > 0, 1, 0) for p in preds])
+            preds = (preds > 0).astype(int)
             result = {"f1": f1_score(p.label_ids, preds, average="micro")}
             # Compute per-label AUC and KS
             if metric_name in ("auc", "ks"):
@@ -874,7 +886,9 @@ def main():
                         ) from e
             return result
         else:
-            probs = preds
+            # AUC/KS 必须在概率上计算（与 predict 输出一致）：
+            # 二分类 AUC(z1) ≠ AUC(sigmoid(z1-z0))，多分类 ovr 要求归一化概率
+            probs = scipy.special.softmax(preds, axis=1)
             preds = np.argmax(preds, axis=1)
             result = {}
             if metric_name == "accuracy":
