@@ -10,6 +10,12 @@
 - NewAttention 改用 F.scaled_dot_product_attention（PyTorch ≥ 2.0，自动选择 FA2/mem-efficient/math 后端）
 
 副作用：logits 始终是 [B, L, V]，Trainer.evaluate 自然对齐 padded labels，无需任何 eval fix。
+
+2026-11 优化：
+- sdpa_mask 懒物化：走 FA2 的机器不再分配 [B,1,L,L] bool mask，SDPA 首层现算后缓存
+- 后端路由（use_flash）在 NewModel.forward 判定一次，24 层共享，不再逐层查设备能力
+- head_mask 显式 raise、output_attentions 显式 warn（原先静默忽略）
+- logn attention_scale 改 Python float（原 CPU 张量逐层隐式 H2D 同步）
 """
 import math
 from dataclasses import dataclass
@@ -43,6 +49,24 @@ try:
     _FLASH_ATTN_AVAILABLE = True
 except ImportError:
     _FLASH_ATTN_AVAILABLE = False
+
+
+def _can_use_flash_attn(q: torch.Tensor) -> bool:
+    """flash-attn 触发条件：包已装 + CUDA + fp16/bf16 + sm_80+。
+
+    由 NewModel._build_attn_metadata 每 forward 调一次，24 层共享结果。
+    """
+    if not _FLASH_ATTN_AVAILABLE:
+        return False
+    if not q.is_cuda:
+        return False
+    if q.dtype not in (torch.float16, torch.bfloat16):
+        return False
+    # sm_80+ 检查（flash-attn 内部会拒绝 sm_70，提前判断省得报错）
+    major, _ = torch.cuda.get_device_capability(q.device)
+    if major < 8:
+        return False
+    return True
 
 
 # ============================================================
@@ -278,26 +302,10 @@ class NewAttention(nn.Module):
         self.o_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=True)
 
         self.dropout_p = config.attention_probs_dropout_prob
-        self.logn_attention_scale = config.logn_attention_scale
-        self.logn_attention_clip1 = config.logn_attention_clip1
         self.softmax_scale = 1.0 / math.sqrt(self.attention_head_size)
 
     def _shape(self, x):
         return x.view(x.shape[:-1] + (self.num_attention_heads, self.attention_head_size))
-
-    def _can_use_flash_attn(self, q: torch.Tensor) -> bool:
-        """flash-attn 触发条件：包已装 + CUDA + fp16/bf16 + sm_80+。"""
-        if not _FLASH_ATTN_AVAILABLE:
-            return False
-        if not q.is_cuda:
-            return False
-        if q.dtype not in (torch.float16, torch.bfloat16):
-            return False
-        # sm_80+ 检查（flash-attn 内部会拒绝 sm_70，提前判断省得报错）
-        major, _ = torch.cuda.get_device_capability(q.device)
-        if major < 8:
-            return False
-        return True
 
     def _flash_attn_forward(
         self,
@@ -367,7 +375,13 @@ class NewAttention(nn.Module):
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
 
-        attn_mask = attn_metadata.get('sdpa_mask')  # 预计算的 bool [B, 1, L, L] or None
+        # 懒物化 bool [B,1,L,L]：首个 SDPA 层现算并缓存回 metadata，后续层复用；
+        # 走 FA2 的机器（A100+）永不触发，省掉 B*L*L 的显存与计算
+        attn_mask = attn_metadata.get('sdpa_mask')
+        if attn_mask is None and attn_metadata.get('mask_bool') is not None:
+            mask_bool = attn_metadata['mask_bool']
+            attn_mask = mask_bool[:, None, None, :] & mask_bool[:, None, :, None]
+            attn_metadata['sdpa_mask'] = attn_mask
 
         out = F.scaled_dot_product_attention(
             q, k, v,
@@ -382,7 +396,7 @@ class NewAttention(nn.Module):
         hidden_states: torch.Tensor,
         attn_metadata: Optional[dict] = None,
         rope_embeds: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-        attention_scale: Optional[torch.Tensor] = None,
+        attention_scale: Optional[float] = None,
     ) -> Tuple[torch.Tensor]:
         q = self._shape(self.q_proj(hidden_states))
         k = self._shape(self.k_proj(hidden_states))
@@ -391,14 +405,18 @@ class NewAttention(nn.Module):
         if self.config.position_embedding_type == 'rope':
             q, k = apply_rotary_pos_emb(q, k, *rope_embeds)
 
-        if self.logn_attention_scale and attention_scale is not None:
-            q = q * attention_scale.to(q.dtype)
+        if attention_scale is not None:
+            q = q * attention_scale
 
         if attn_metadata is None:
-            attn_metadata = {'is_padded': False, 'cu_seqlens': None, 'indices': None,
-                             'max_seqlen': None, 'sdpa_mask': None}
+            # 孤立调用（未经 NewModel.forward）：兜底空 metadata + 现场路由
+            attn_metadata = {'use_flash': None, 'is_padded': False, 'cu_seqlens': None,
+                             'indices': None, 'max_seqlen': None, 'mask_bool': None,
+                             'sdpa_mask': None}
+        if attn_metadata['use_flash'] is None:
+            attn_metadata['use_flash'] = _can_use_flash_attn(q)
 
-        if self._can_use_flash_attn(q):
+        if attn_metadata['use_flash']:
             context = self._flash_attn_forward(q, k, v, attn_metadata)
         else:
             context = self._sdpa_forward(q, k, v, attn_metadata)
@@ -442,7 +460,7 @@ class NewLayer(nn.Module):
         hidden_states: torch.Tensor,
         attn_metadata: Optional[dict] = None,
         rope_embeds: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-        attention_scale: Optional[torch.Tensor] = None,
+        attention_scale: Optional[float] = None,
     ) -> Tuple[torch.Tensor]:
         # Post-LN: residual on raw input, then LN
         residual = hidden_states
@@ -479,7 +497,7 @@ class NewEncoder(nn.Module):
         hidden_states: torch.Tensor,
         attn_metadata: Optional[dict] = None,
         rope_embeds: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-        attention_scale: Optional[torch.Tensor] = None,
+        attention_scale: Optional[float] = None,
         output_hidden_states: Optional[bool] = False,
         return_dict: Optional[bool] = True,
     ) -> Union[Tuple[torch.Tensor], BaseModelOutput]:
@@ -575,45 +593,43 @@ class NewModel(NewPreTrainedModel):
     def _build_attn_metadata(
         self,
         attention_mask: Optional[torch.Tensor],
-        input_shape: Tuple[int, ...],
+        hidden_states: torch.Tensor,
     ) -> dict:
         """预计算 attention 辅助数据，所有层共享。
 
+        以 hidden_states（与 Q/K/V 同 dtype/device）为准确立一次后端路由，
+        24 层不再各自查询设备能力。
+
         返回 dict 含：
-          - is_padded: bool       — 是否有 padding（决定 FA2 走 varlen 还是普通）
+          - use_flash: bool        — 本 forward 是否走 flash-attn（否则 SDPA）
+          - is_padded: bool        — 是否有 padding（决定 FA2 走 varlen 还是普通）
           - cu_seqlens: [B+1] int32 — varlen 模式下样本边界（前缀和）
           - indices: [total_valid] long — valid token 在 [B*L] 中的位置
           - max_seqlen: int        — batch 内最长 valid 长度
-          - sdpa_mask: bool [B, 1, L, L] or None — SDPA fallback 用
+          - mask_bool: [B, L] bool — SDPA 懒物化 [B,1,L,L] mask 的原料
+          - sdpa_mask: bool [B, 1, L, L] or None — 首个 SDPA 层使用时才填充
         """
+        meta = {'use_flash': _can_use_flash_attn(hidden_states), 'is_padded': False,
+                'cu_seqlens': None, 'indices': None, 'max_seqlen': None,
+                'mask_bool': None, 'sdpa_mask': None}
         if attention_mask is None:
-            return {'is_padded': False, 'cu_seqlens': None, 'indices': None,
-                    'max_seqlen': None, 'sdpa_mask': None}
+            return meta
 
         # 一次性 GPU→CPU sync：判断是否全 1
         is_padded = not bool(attention_mask.all())
         if not is_padded:
-            return {'is_padded': False, 'cu_seqlens': None, 'indices': None,
-                    'max_seqlen': None, 'sdpa_mask': None}
+            return meta
 
+        meta['is_padded'] = True
         mask_bool = attention_mask.to(torch.bool)  # [B, L]
+        meta['mask_bool'] = mask_bool
         valid_per_seq = mask_bool.sum(dim=1)  # [B]
         # cu_seqlens: [0, len_1, len_1+len_2, ..., total_valid]
-        cu_seqlens = F.pad(valid_per_seq.cumsum(0).to(torch.int32), (1, 0), value=0)
+        meta['cu_seqlens'] = F.pad(valid_per_seq.cumsum(0).to(torch.int32), (1, 0), value=0)
         # 一次性 GPU→CPU sync：取 max
-        max_seqlen = int(valid_per_seq.max().item())
-        indices = torch.nonzero(mask_bool.flatten(), as_tuple=False).flatten()
-
-        # SDPA fallback 用的 bool mask（仅当走 SDPA 时才用）
-        sdpa_mask = mask_bool[:, None, None, :] & mask_bool[:, None, :, None]
-
-        return {
-            'is_padded': True,
-            'cu_seqlens': cu_seqlens,
-            'indices': indices,
-            'max_seqlen': max_seqlen,
-            'sdpa_mask': sdpa_mask,
-        }
+        meta['max_seqlen'] = int(valid_per_seq.max().item())
+        meta['indices'] = torch.nonzero(mask_bool.flatten(), as_tuple=False).flatten()
+        return meta
 
     def forward(
         self,
@@ -632,6 +648,12 @@ class NewModel(NewPreTrainedModel):
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        # 双后端 attention 均无法输出注意力权重 / 不支持 head_mask，显式暴露而非静默吞掉
+        if head_mask is not None:
+            raise NotImplementedError("gte-new-fa2 的双后端 attention 不支持 head_mask")
+        if output_attentions:
+            logger.warning_once("gte-new-fa2 不支持 output_attentions，attentions 恒为 None")
 
         if input_ids is not None and inputs_embeds is not None:
             raise ValueError("Cannot specify both input_ids and inputs_embeds")
@@ -652,9 +674,9 @@ class NewModel(NewPreTrainedModel):
         )
 
         # === 预计算 attention metadata，所有层共享 ===
-        # 把 cu_seqlens/indices/max_seqlen/bool_mask 在 forward 开始时算一次，
+        # 后端路由（use_flash）+ cu_seqlens/indices/mask_bool 在 forward 开始时算一次，
         # 避免 NewAttention 每层都重算（24 层 × 每层 GPU→CPU sync 会慢一倍）
-        attn_metadata = self._build_attn_metadata(attention_mask, input_shape)
+        attn_metadata = self._build_attn_metadata(attention_mask, embedding_output)
 
         attention_scale = None
         if self.config.logn_attention_scale:
@@ -663,7 +685,8 @@ class NewModel(NewPreTrainedModel):
                 logn = math.log(seq_len / 8192) + 1.0
                 if self.config.logn_attention_clip1:
                     logn = max(logn, 1.0)
-                attention_scale = torch.tensor(logn)
+                # Python float：避免 CPU 标量张量在每层乘法中隐式 H2D 同步
+                attention_scale = logn
 
         encoder_outputs = self.encoder(
             embedding_output,
