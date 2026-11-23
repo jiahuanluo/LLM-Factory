@@ -4,13 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-基于 HuggingFace Transformers 的 LLM 训练工具集，包含两个独立训练脚本：分类微调和掩码语言模型继续预训练。均改编自 Transformers 官方示例。无测试套件，无 CI/CD。
+基于 HuggingFace Transformers 的 LLM 训练工具集，包含三个训练脚本：分类微调、多分类微调（accuracy+AUC 双指标）和掩码语言模型继续预训练。均改编自 Transformers 官方示例。无测试套件，无 CI/CD。
 
 ## 功能概览
 
 本仓库提供以下核心功能：
 
 - **文本分类微调** (`run_classification.py`) — 支持单标签 / 多标签 / 回归三类任务，内置 accuracy、auc、ks、f1、mse 五种评估指标
+- **多分类微调** (`run_multiclass_classification.py`) — 整数多类别 label 专用，eval 同时输出 accuracy 与 AUC（OvR 合并计算），无需 metric_name 二选一
 - **MLM 继续预训练** (`run_mlm.py`) — 支持 BERT、RoBERTa、ALBERT 等掩码语言模型继续预训练，也可从零训练
 - **YAML 配置系统** (`args_parser.py`) — 统一的 YAML / JSON / CLI 三模式参数解析，支持 YAML + CLI 覆盖组合
 - **DeepSpeed 分布式训练** — 内置 ZeRO-2 / ZeRO-3 配置模板，支持多卡训练
@@ -24,32 +25,32 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # 使用 YAML 配置（推荐）
-python run_classification.py configs/sft_cls_auc.yaml
+python run_classification.py configs/sft_cls_full.yaml
 
 # YAML + CLI 覆盖参数
-python run_classification.py configs/sft_cls_auc.yaml --learning_rate 1e-4 --num_train_epochs 5
+python run_classification.py configs/sft_cls_full.yaml --learning_rate 1e-4 --num_train_epochs 5
 ```
 
 ### 2. MLM 继续预训练
 
 ```bash
-python run_mlm.py configs/pt_mlm.yaml
+python run_mlm.py configs/pt_mlm_imdb_baseline.yaml
 ```
 
 ### 3. 多卡训练
 
 ```bash
-torchrun --nproc_per_node 8 run_classification.py configs/sft_cls_auc.yaml
+torchrun --nproc_per_node 8 run_classification.py configs/sft_cls_full.yaml
 ```
 
 ### 4. DeepSpeed 训练
 
 ```bash
 # ZeRO-2（推荐大多数场景）
-torchrun --nproc_per_node 8 run_classification.py configs/sft_cls_auc.yaml --deepspeed configs/ds_z2.json
+torchrun --nproc_per_node 8 run_classification.py configs/sft_cls_full.yaml --deepspeed configs/ds_z2.json
 
 # ZeRO-3（超大模型）
-torchrun --nproc_per_node 8 run_classification.py configs/sft_cls_auc.yaml --deepspeed configs/ds_z3.json
+torchrun --nproc_per_node 8 run_classification.py configs/sft_cls_full.yaml --deepspeed configs/ds_z3.json
 ```
 
 ### 5. 命令行参数（兼容 HuggingFace 原生方式）
@@ -77,7 +78,7 @@ python run_classification.py --model_name_or_path <model> --train_file train.csv
 
 ```bash
 # 直接运行（PEP 723 自动拉取依赖）
-python run_classification.py configs/sft_cls_auc.yaml
+python run_classification.py configs/sft_cls_full.yaml
 
 # 或手动安装
 pip install -r requirements.txt
@@ -95,34 +96,36 @@ python setup_claude.py            # 执行
 ## 训练脚本
 
 - **`run_classification.py`** — 文本分类微调（单标签 / 多标签 / 回归），使用 sklearn 做评估指标
+- **`run_multiclass_classification.py`** — 多分类专用微调（整数多类别 label），eval 同时输出 accuracy 与 AUC（OvR）
 - **`run_mlm.py`** — 掩码语言模型继续预训练（BERT、ALBERT、RoBERTa 等），支持从头训练
+- **`run_classification_official.py`** — HF 官方原版参考副本，不用于日常训练
 
 ## 示例用例
 
 ### 分类任务示例
 
 ```bash
-# 二分类 AUC 评估（风控场景）
-python run_classification.py configs/sft_cls_auc.yaml
+# 分类训练（生产参数完整版，metric_name 可改 auc）
+python run_classification.py configs/sft_cls_full.yaml
 
 # 多验证集评估（OOT 时间外样本）
-python run_classification.py configs/sft_cls_multi_val.yaml
+python run_classification.py configs/sft_cls_full.yaml --validation_files val1.csv,val2.csv
 
-# 预测
-python run_classification.py configs/predict_cls.yaml
+# 预测（predict-only，推荐）
+python run_classification.py configs/predict_only.yaml
 ```
 
 ### MLM 预训练示例
 
 ```bash
 # 逐行模式（每行一句完整句子）
-python run_mlm.py configs/pt_mlm.yaml --line_by_line true
+python run_mlm.py configs/pt_mlm_imdb_baseline.yaml --line_by_line true
 
 # 拼接模式（默认，所有文本拼接后按 max_seq_length 分块）
-python run_mlm.py configs/pt_mlm.yaml
+python run_mlm.py configs/pt_mlm_imdb_baseline.yaml
 
 # 从零训练（不加载预训练权重）
-python run_mlm.py configs/pt_mlm.yaml --model_name_or_path null --model_type bert
+python run_mlm.py configs/pt_mlm_imdb_baseline.yaml --model_name_or_path null --model_type bert
 ```
 
 ### 数据格式示例
@@ -177,9 +180,14 @@ Another sentence for the model to learn from.
 
 | 文件 | 用途 |
 |---|---|
-| `sft_cls_auc.yaml` | 二分类 AUC 评估（风控场景） |
-| `sft_cls_multi_val.yaml` | 多验证集评估 |
-| `pt_mlm.yaml` | MLM 继续预训练 |
+| `sft_cls_full.yaml` | 分类训练完整版（对齐 8 卡生产参数，推荐起点） |
+| `example_cls.yaml` | 分类训练精简示例 |
+| `mc_cls_example.yaml` | 多分类示例（`run_multiclass_classification.py`） |
+| `predict_only.yaml` | 纯预测最小配置（predict-only 路径） |
+| `predict_cls_full.yaml` / `predict_cls.yaml` | 预测全字段版 / 旧版兼容写法 |
+| `pt_mlm_imdb_baseline.yaml` / `pt_mlm_imdb_phaseA.yaml` | IMDB MLM scratch 预训练（官方架构 / gte-new 对照组） |
+| `sft_cls_imdb_baseline.yaml` / `sft_cls_imdb_phaseA.yaml` | IMDB 分类微调（承接对应 MLM 产物） |
+| `claude_config.yaml` | Claude Code 离线部署配置（`setup_claude.py`） |
 | `ds_z2.json` | DeepSpeed ZeRO-2 配置 |
 | `ds_z3.json` | DeepSpeed ZeRO-3 配置 |
 
@@ -218,7 +226,7 @@ bf16: false  # A100/H100 推荐
 - 多测试集：`--test_file` 同样支持逗号分隔，单个输出 `predict_results.csv`（CSV 格式，逗号分隔，含逗号字段自动加引号转义），多个输出 `predict_results_test_0.csv`, `predict_results_test_1.csv` ...
 - label 发现：从 train + 所有 validation/test split 合并 label list，防止 val 出现 train 未见的标签
 - predict-only 模式：`do_predict=true` 且 `do_train=false` 且 `do_eval=false` 且未设 `train_file` 时自动启用，跳过 train/validation 加载，label 直接从 `model.config.label2id` 读取，test_file 可不带 label 列
-- 预测输出保留原始数据所有非文本列，附加 `prediction` 列（二分类为正类概率，多分类为标签名，多标签为各标签 sigmoid 概率，回归为预测值）
+- 预测输出保留原始数据所有非文本列，附加 `prediction` 列（二分类为正类概率，多分类为标签名+概率，多标签为各标签 sigmoid 概率，回归为预测值）；`label` 列会被刻意移除（不进入预测输出）
 
 ### run_mlm.py
 
