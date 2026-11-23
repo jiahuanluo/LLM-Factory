@@ -14,7 +14,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **多分类微调** (`run_multiclass_classification.py`) — 整数多类别 label 专用，eval 同时输出 accuracy 与 AUC（OvR 合并计算），无需 metric_name 二选一
 - **MLM 继续预训练** (`run_mlm.py`) — 支持 BERT、RoBERTa、ALBERT 等掩码语言模型继续预训练，也可从零训练
 - **YAML 配置系统** (`args_parser.py`) — 统一的 YAML / JSON / CLI 三模式参数解析，支持 YAML + CLI 覆盖组合
-- **DeepSpeed 分布式训练** — 内置 ZeRO-2 / ZeRO-3 配置模板，支持多卡训练
 - **Checkpoint 自动恢复** — 训练中断后重新运行自动从最新 checkpoint 恢复
 - **UNK Token 检查** — 训练前自动检测 tokenizer 与数据语言匹配度
 - **Claude Code 离线部署** (`setup_claude.py`) — 离线环境一键安装 Claude Code 及插件
@@ -43,17 +42,7 @@ python run_mlm.py configs/pt_mlm_imdb_baseline.yaml
 torchrun --nproc_per_node 8 run_classification.py configs/sft_cls_full.yaml
 ```
 
-### 4. DeepSpeed 训练
-
-```bash
-# ZeRO-2（推荐大多数场景）
-torchrun --nproc_per_node 8 run_classification.py configs/sft_cls_full.yaml --deepspeed configs/ds_z2.json
-
-# ZeRO-3（超大模型）
-torchrun --nproc_per_node 8 run_classification.py configs/sft_cls_full.yaml --deepspeed configs/ds_z3.json
-```
-
-### 5. 命令行参数（兼容 HuggingFace 原生方式）
+### 4. 命令行参数（兼容 HuggingFace 原生方式）
 
 ```bash
 python run_classification.py --model_name_or_path <model> --train_file train.csv --do_train --do_eval
@@ -188,8 +177,6 @@ Another sentence for the model to learn from.
 | `pt_mlm_imdb_baseline.yaml` / `pt_mlm_imdb_phaseA.yaml` | IMDB MLM scratch 预训练（官方架构 / gte-new 对照组） |
 | `sft_cls_imdb_baseline.yaml` / `sft_cls_imdb_phaseA.yaml` | IMDB 分类微调（承接对应 MLM 产物） |
 | `claude_config.yaml` | Claude Code 离线部署配置（`setup_claude.py`） |
-| `ds_z2.json` | DeepSpeed ZeRO-2 配置 |
-| `ds_z3.json` | DeepSpeed ZeRO-3 配置 |
 
 ### YAML 配置特性
 
@@ -264,10 +251,7 @@ gradient_accumulation_steps: 4
 # 方法 3：开启混合精度
 fp16: true  # 或 bf16: true（A100/H100）
 
-# 方法 4：使用 DeepSpeed ZeRO-2
-# torchrun ... --deepspeed configs/ds_z2.json
-
-# 方法 5：减小序列长度
+# 方法 4：减小序列长度
 max_seq_length: 64
 ```
 
@@ -326,7 +310,6 @@ token: "your-hf-token"
 - **`UNK token 占比超过 10%`** — tokenizer 与数据语言不匹配。解决：更换 tokenizer 或检查数据。
 - **`ignore_mismatched_sizes`** — 修改了分类头维度时需手动开启：`ignore_mismatched_sizes: true`。
 - **`processing_class` vs `tokenizer`** — 本仓库使用新版 Trainer API（`processing_class=tokenizer`）。如遇 transformers 版本兼容问题，检查 `transformers>=4.57.0`。
-- **DeepSpeed ZeRO 选择** — 大多数场景用 ZeRO-2（`ds_z2.json`）；超大模型用 ZeRO-3（`ds_z3.json`）。
 - **`metric_for_best_model` 格式** — 多验证集场景必须指定 split，如 `eval_validation_0_auc`，否则无法对齐评估 key。
 
 ## 依赖版本

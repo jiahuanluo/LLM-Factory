@@ -57,8 +57,6 @@ UNK 占比超 10% 直接终止并标注 split 名。这几乎总是 tokenizer �
 python run_classification.py my_config.yaml
 # 多卡
 torchrun --nproc_per_node 8 run_classification.py my_config.yaml
-# DeepSpeed（大多数场景 ZeRO-2；超大模型 ZeRO-3）
-torchrun --nproc_per_node 8 run_classification.py my_config.yaml --deepspeed configs/ds_z2.json
 ```
 
 - 训练日志自动写入 `output_dir/train.log`（含异常完整 traceback），无需手动重定向。

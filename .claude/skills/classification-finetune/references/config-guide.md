@@ -59,10 +59,8 @@ eval_{metric}_{label}              # per-label 指标
 1. `per_device_train_batch_size` 减半
 2. `gradient_accumulation_steps` 相应上调（等效大 batch）
 3. `fp16: true`（V100）/ `bf16: true`（A100/H100）
-4. DeepSpeed ZeRO-2：`--deepspeed configs/ds_z2.json`
-5. `gradient_checkpointing: true` + `use_reentrant: false`（激活显存大降，速度慢 20-30%，OOM 前的最后手段）
-6. `max_seq_length` 下调（会截断长样本、改变任务语义，放靠后）
-7. 超大模型再上 ZeRO-3（`ds_z3.json`）
+4. `gradient_checkpointing: true` + `use_reentrant: false`（激活显存大降，速度慢 20-30%，OOM 前的最后手段）
+5. `max_seq_length` 下调（会截断长样本、改变任务语义，放靠后）
 
 ## 太慢（按优先级尝试）
 

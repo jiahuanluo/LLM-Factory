@@ -95,16 +95,6 @@ torchrun --nproc_per_node 2 run_classification.py configs/sft_cls.yaml
 torchrun --nproc_per_node 8 run_classification.py configs/sft_cls.yaml
 ```
 
-### 5. DeepSpeed 训练
-
-```bash
-# ZeRO-2（推荐大多数场景）
-torchrun --nproc_per_node 8 run_classification.py configs/sft_cls.yaml --deepspeed configs/ds_z2.json
-
-# ZeRO-3（超大模型）
-torchrun --nproc_per_node 8 run_classification.py configs/sft_cls.yaml --deepspeed configs/ds_z3.json
-```
-
 ---
 
 ## 文本分类详解 (`run_classification.py`)
@@ -217,7 +207,6 @@ logging_steps: 10                        # 日志间隔
 report_to: tensorboard                   # 日志工具
 
 # === 分布式 ===
-deepspeed: null                          # DeepSpeed 配置路径
 gradient_accumulation_steps: 1           # 梯度累积
 ```
 
@@ -328,8 +317,6 @@ python run_classification.py --model_name_or_path bert-base-uncased --train_file
 | `configs/example_cls.yaml` | 分类完整配置示例（带详细注释） |
 | `configs/pt_mlm.yaml` | MLM 继续预训练 |
 | `configs/example_mlm.yaml` | MLM 完整配置示例（带详细注释） |
-| `configs/ds_z2.json` | DeepSpeed ZeRO-2 配置 |
-| `configs/ds_z3.json` | DeepSpeed ZeRO-3 配置 |
 
 ---
 
@@ -452,8 +439,6 @@ LLM-Factory/
 │   ├── example_cls.yaml          # 分类完整示例
 │   ├── pt_mlm.yaml               # MLM 预训练
 │   ├── example_mlm.yaml          # MLM 完整示例
-│   ├── ds_z2.json                # DeepSpeed ZeRO-2
-│   ├── ds_z3.json                # DeepSpeed ZeRO-3
 │   └── claude_config.yaml        # Claude Code 配置
 ├── data/                          # 示例数据
 │   ├── train.csv                  # 分类训练集
@@ -478,10 +463,7 @@ gradient_accumulation_steps: 4  # 等效 batch_size = 8 * 4 = 32
 # 方法 3：开启混合精度
 fp16: true  # 或 bf16: true（A100/H100）
 
-# 方法 4：使用 DeepSpeed ZeRO-2
-# torchrun ... --deepspeed configs/ds_z2.json
-
-# 方法 5：减小序列长度
+# 方法 4：减小序列长度
 max_seq_length: 64
 ```
 
